@@ -78,7 +78,7 @@ Rectangle {
         return defaultTheme[prop] !== undefined ? defaultTheme[prop] : fallback;
     }
 
-    implicitWidth: 250
+    implicitWidth: 220
     implicitHeight: 700
     color: getToken("surfaceContainerLow", "#1c1b1c")
 
@@ -94,18 +94,18 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 14
-        spacing: 16
+        anchors.margins: 12
+        spacing: 14
 
         // 1. Cabeçalho de Marca da Redshift Store
         RowLayout {
             Layout.fillWidth: true
-            spacing: 12
+            spacing: 10
 
             // Emblema visual
             Rectangle {
-                width: 42
-                height: 42
+                width: 38
+                height: 38
                 radius: root.getToken("radiusNormal", 14)
                 color: root.getToken("primaryContainer", "#4f378b")
 
@@ -113,7 +113,7 @@ Rectangle {
                     anchors.centerIn: parent
                     text: "shopping_bag"
                     font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
-                    font.pixelSize: 22
+                    font.pixelSize: 20
                     color: root.getToken("onPrimaryContainer", "#eaddff")
                 }
             }
@@ -125,7 +125,7 @@ Rectangle {
                 Text {
                     text: "Redshift Store"
                     font.family: root.getToken("fontFamily", "Google Sans Flex")
-                    font.pixelSize: 16
+                    font.pixelSize: 15
                     font.weight: Font.DemiBold
                     color: root.getToken("onSurface", "#e6e1e1")
                     elide: Text.ElideRight
@@ -133,7 +133,7 @@ Rectangle {
                 }
 
                 RowLayout {
-                    spacing: 6
+                    spacing: 5
 
                     Rectangle {
                         width: 7
@@ -144,11 +144,12 @@ Rectangle {
                     }
 
                     Text {
-                        text: (root.frontendMode === "caelestia" ? "Caelestia Shell" : "end-4 Shell") + (root.isBusy ? " • Ocupado" : " • Pronto")
+                        text: (root.frontendMode === "caelestia" ? "Caelestia" : "end-4") + (root.isBusy ? " • Ocupado" : " • Pronto")
                         font.family: root.getToken("fontFamily", "Google Sans Flex")
                         font.pixelSize: 11
                         color: root.getToken("onSurfaceVariant", "#cbc5ca")
                         elide: Text.ElideRight
+                        Layout.fillWidth: true
                     }
                 }
             }
@@ -179,7 +180,7 @@ Rectangle {
                     id: navItem
                     required property var modelData
                     Layout.fillWidth: true
-                    height: 44
+                    height: 42
                     radius: root.getToken("radiusNormal", 14)
 
                     readonly property bool isSelected: root.currentPage === modelData.id
@@ -191,8 +192,13 @@ Rectangle {
                         return "transparent";
                     }
 
+                    scale: itemMouseArea.pressed ? 0.97 : 1.0
+
                     Behavior on color {
                         ColorAnimation { duration: 180; easing.type: Easing.OutQuad }
+                    }
+                    Behavior on scale {
+                        NumberAnimation { duration: 140; easing.type: Easing.OutQuad }
                     }
 
                     // Indicador vertical esquerdo de seleção ativa
@@ -206,44 +212,44 @@ Rectangle {
                         color: root.getToken("primary", "#d0bcff")
                         visible: navItem.isSelected
                         Behavior on height {
-                            NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+                            NumberAnimation { duration: 160; easing.type: Easing.OutQuad }
                         }
                     }
 
                     RowLayout {
                         anchors.fill: parent
-                        anchors.leftMargin: 16
-                        anchors.rightMargin: 14
-                        spacing: 12
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 10
+                        spacing: 10
 
                         Text {
                             text: navItem.modelData.icon
                             font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
-                            font.pixelSize: 20
+                            font.pixelSize: 19
                             color: navItem.isSelected ?
-                                root.getToken("primary", "#d0bcff") :
+                                root.getToken("onSecondaryContainer", "#e8def8") :
                                 (navItem.isHovered ? root.getToken("onSurface", "#e6e1e1") : root.getToken("onSurfaceVariant", "#cbc5ca"))
-                            Behavior on color { ColorAnimation { duration: 150 } }
+                            Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
                         }
 
                         Text {
                             text: navItem.modelData.label
                             font.family: root.getToken("fontFamily", "Google Sans Flex")
-                            font.pixelSize: 14
+                            font.pixelSize: 13
                             font.weight: navItem.isSelected ? Font.Medium : Font.Normal
                             color: navItem.isSelected ?
-                                root.getToken("onSurface", "#e6e1e1") :
+                                root.getToken("onSecondaryContainer", "#e8def8") :
                                 (navItem.isHovered ? root.getToken("onSurface", "#e6e1e1") : root.getToken("onSurfaceVariant", "#cbc5ca"))
                             Layout.fillWidth: true
                             elide: Text.ElideRight
-                            Behavior on color { ColorAnimation { duration: 150 } }
+                            Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
                         }
 
                         // Badge numérico
                         Rectangle {
                             visible: navItem.modelData.badge > 0
-                            implicitWidth: Math.max(badgeText.implicitWidth + 12, 22)
-                            height: 20
+                            implicitWidth: Math.max(badgeText.implicitWidth + 10, 20)
+                            height: 19
                             radius: root.getToken("radiusFull", 9999)
                             color: navItem.modelData.highlight ?
                                 root.getToken("primary", "#d0bcff") :
@@ -254,7 +260,7 @@ Rectangle {
                                 anchors.centerIn: parent
                                 text: navItem.modelData.badge > 999 ? "999+" : navItem.modelData.badge.toString()
                                 font.family: root.getToken("monoFontFamily", "JetBrains Mono NF")
-                                font.pixelSize: 11
+                                font.pixelSize: 10
                                 font.weight: Font.Bold
                                 color: navItem.modelData.highlight ?
                                     root.getToken("onPrimary", "#381e72") :
@@ -283,7 +289,7 @@ Rectangle {
         Rectangle {
             id: logsBtn
             Layout.fillWidth: true
-            height: 44
+            height: 42
             radius: root.getToken("radiusNormal", 14)
             color: logsMouseArea.containsMouse ?
                 root.getToken("surfaceContainerHigh", "#2b2a2a") :
@@ -291,19 +297,19 @@ Rectangle {
             border.width: 1
             border.color: root.isBusy ? root.getToken("primary", "#d0bcff") : root.getToken("outlineVariant", "#49454f")
 
-            Behavior on color { ColorAnimation { duration: 180 } }
-            Behavior on border.color { ColorAnimation { duration: 180 } }
+            Behavior on color { ColorAnimation { duration: 180; easing.type: Easing.OutQuad } }
+            Behavior on border.color { ColorAnimation { duration: 180; easing.type: Easing.OutQuad } }
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 12
-                anchors.rightMargin: 12
-                spacing: 10
+                anchors.leftMargin: 10
+                anchors.rightMargin: 10
+                spacing: 8
 
                 Text {
                     text: root.isBusy ? "sync" : "terminal"
                     font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
-                    font.pixelSize: 20
+                    font.pixelSize: 19
                     color: root.isBusy ? root.getToken("primary", "#d0bcff") : root.getToken("onSurfaceVariant", "#cbc5ca")
 
                     RotationAnimation on rotation {
@@ -316,9 +322,9 @@ Rectangle {
                 }
 
                 Text {
-                    text: root.isBusy ? "Operação em curso..." : "Console de Logs"
+                    text: root.isBusy ? "Operação..." : "Console de Logs"
                     font.family: root.getToken("fontFamily", "Google Sans Flex")
-                    font.pixelSize: 13
+                    font.pixelSize: 12
                     font.weight: root.isBusy ? Font.Medium : Font.Normal
                     color: root.isBusy ? root.getToken("onPrimaryContainer", "#eaddff") : root.getToken("onSurface", "#e6e1e1")
                     Layout.fillWidth: true
@@ -328,7 +334,7 @@ Rectangle {
                 Text {
                     text: "expand_less"
                     font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
-                    font.pixelSize: 18
+                    font.pixelSize: 17
                     color: root.getToken("onSurfaceVariant", "#cbc5ca")
                 }
             }
@@ -346,26 +352,26 @@ Rectangle {
         Rectangle {
             id: themeCard
             Layout.fillWidth: true
-            height: 52
+            height: 48
             radius: root.getToken("radiusNormal", 14)
             color: root.getToken("surfaceContainerLowest", "#0f0e0e")
             border.width: 1
             border.color: Qt.alpha(root.getToken("outlineVariant", "#49454f"), 0.5)
 
-            Behavior on color { ColorAnimation { duration: 180 } }
+            Behavior on color { ColorAnimation { duration: 180; easing.type: Easing.OutQuad } }
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 10
-                anchors.rightMargin: 10
-                anchors.topMargin: 8
-                anchors.bottomMargin: 8
-                spacing: 10
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                anchors.topMargin: 6
+                anchors.bottomMargin: 6
+                spacing: 8
 
                 // Ícone de paleta / modo
                 Rectangle {
-                    width: 32
-                    height: 32
+                    width: 30
+                    height: 30
                     radius: root.getToken("radiusSmall", 8)
                     color: root.getToken("surfaceContainerHigh", "#2b2a2a")
 
@@ -373,7 +379,7 @@ Rectangle {
                         anchors.centerIn: parent
                         text: root.isDark ? "dark_mode" : "light_mode"
                         font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
-                        font.pixelSize: 18
+                        font.pixelSize: 16
                         color: root.getToken("primary", "#d0bcff")
                     }
                 }
@@ -393,11 +399,12 @@ Rectangle {
                     }
 
                     Text {
-                        text: (root.isDark ? "Modo Escuro" : "Modo Claro") + " • " + (root.activeShellMode === "caelestia" ? "Caelestia" : "end-4")
+                        text: (root.isDark ? "Escuro" : "Claro") + " • " + (root.activeShellMode === "caelestia" ? "Caelestia" : "end-4")
                         font.family: root.getToken("fontFamily", "Google Sans Flex")
                         font.pixelSize: 11
                         color: root.getToken("onSurfaceVariant", "#cbc5ca")
                         elide: Text.ElideRight
+                        Layout.fillWidth: true
                     }
                 }
             }

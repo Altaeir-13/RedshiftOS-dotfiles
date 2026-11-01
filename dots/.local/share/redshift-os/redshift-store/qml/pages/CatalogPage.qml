@@ -226,11 +226,12 @@ Rectangle {
 
         // =====================================================================
         // 3. Barra de Filtros Combináveis (Instalação + Ordenação + Pacotes Sistema)
+        // Linha compacta de controles esteticamente limpa e sem poluição
         // =====================================================================
         Flickable {
             id: secondaryFiltersFlickable
             Layout.fillWidth: true
-            implicitHeight: 38
+            implicitHeight: 34
             contentWidth: secondaryFiltersRow.implicitWidth + 8
             contentHeight: height
             flickableDirection: Flickable.HorizontalFlick
@@ -249,7 +250,7 @@ Rectangle {
                 height: parent.height
                 spacing: 8
 
-                // --- Grupo 1: Filtro de Instalação ---
+                // --- Grupo 1: Filtro de Instalação (Pílulas compactas 28px) ---
                 RowLayout {
                     spacing: 4
 
@@ -267,7 +268,7 @@ Rectangle {
                             readonly property bool isHovered: instChipMouse.containsMouse
 
                             implicitWidth: instChipContent.implicitWidth + 18
-                            height: 30
+                            height: 28
                             radius: root.getToken("radiusFull", 9999)
 
                             color: isSelected ?
@@ -276,6 +277,10 @@ Rectangle {
 
                             border.width: 1
                             border.color: isSelected ? root.getToken("secondary", "#ccc2dc") : root.getToken("outlineVariant", "#49454f")
+
+                            scale: instChipMouse.pressed ? 0.96 : (instChip.isHovered && !instChip.isSelected ? 1.02 : 1.0)
+                            Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutQuad } }
+                            Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
 
                             RowLayout {
                                 id: instChipContent
@@ -309,12 +314,12 @@ Rectangle {
                 // Separador vertical sutil
                 Rectangle {
                     width: 1
-                    height: 20
+                    height: 16
                     color: root.getToken("outlineVariant", "#49454f")
-                    opacity: 0.5
+                    opacity: 0.4
                 }
 
-                // --- Grupo 2: Ordenação ---
+                // --- Grupo 2: Ordenação Compacta ---
                 RowLayout {
                     spacing: 4
 
@@ -333,7 +338,7 @@ Rectangle {
                             readonly property bool isHovered: sortChipMouse.containsMouse
 
                             implicitWidth: sortChipContent.implicitWidth + 16
-                            height: 30
+                            height: 28
                             radius: root.getToken("radiusFull", 9999)
 
                             color: isSelected ?
@@ -342,6 +347,10 @@ Rectangle {
 
                             border.width: 1
                             border.color: isSelected ? root.getToken("primary", "#d0bcff") : root.getToken("outlineVariant", "#49454f")
+
+                            scale: sortChipMouse.pressed ? 0.96 : (sortChip.isHovered && !sortChip.isSelected ? 1.02 : 1.0)
+                            Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutQuad } }
+                            Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
 
                             RowLayout {
                                 id: sortChipContent
@@ -382,19 +391,19 @@ Rectangle {
                 // Separador vertical sutil
                 Rectangle {
                     width: 1
-                    height: 20
+                    height: 16
                     color: root.getToken("outlineVariant", "#49454f")
-                    opacity: 0.5
+                    opacity: 0.4
                 }
 
-                // --- Grupo 3: Toggle Pacotes de Sistema / Bibliotecas ---
+                // --- Grupo 3: Toggle Pacotes de Sistema / Bibliotecas (Discreto) ---
                 Rectangle {
                     id: sysPackChip
                     readonly property bool isActive: root.includeSysPackages
                     readonly property bool isHovered: sysPackMouse.containsMouse
 
-                    implicitWidth: sysPackContent.implicitWidth + 18
-                    height: 30
+                    implicitWidth: sysPackContent.implicitWidth + 16
+                    height: 28
                     radius: root.getToken("radiusFull", 9999)
 
                     color: isActive ?
@@ -404,20 +413,24 @@ Rectangle {
                     border.width: 1
                     border.color: isActive ? root.getToken("tertiary", "#efb8c8") : root.getToken("outlineVariant", "#49454f")
 
+                    scale: sysPackMouse.pressed ? 0.96 : (sysPackChip.isHovered && !sysPackChip.isActive ? 1.02 : 1.0)
+                    Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutQuad } }
+                    Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
+
                     RowLayout {
                         id: sysPackContent
                         anchors.centerIn: parent
-                        spacing: 5
+                        spacing: 4
 
                         Text {
                             text: sysPackChip.isActive ? "check_box" : "check_box_outline_blank"
                             font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
-                            font.pixelSize: 15
+                            font.pixelSize: 14
                             color: sysPackChip.isActive ? root.getToken("onTertiaryContainer", "#ffd8e4") : root.getToken("onSurfaceVariant", "#cbc5ca")
                         }
 
                         Text {
-                            text: "Incluir bibliotecas/sistema"
+                            text: "Bibliotecas/sistema"
                             font.family: root.getToken("fontFamily", "Google Sans Flex")
                             font.pixelSize: 11
                             font.weight: sysPackChip.isActive ? Font.Medium : Font.Normal
@@ -514,6 +527,10 @@ Rectangle {
                                 root.getToken("tertiary", "#efb8c8") :
                                 (isHovered ? root.getToken("surfaceContainerHighest", "#363435") : root.getToken("surfaceContainer", "#201f20"))
 
+                            scale: aurTabMouse.pressed ? 0.96 : (aurTabChip.isHovered && !aurTabChip.isSelected ? 1.02 : 1.0)
+                            Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutQuad } }
+                            Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
+
                             RowLayout {
                                 id: aurTabRow
                                 anchors.centerIn: parent
@@ -554,14 +571,14 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
-            // Grade de Pacotes
+            // Grade de Pacotes Responsiva sem corte horizontal
             GridView {
                 id: catalogGridView
                 anchors.fill: parent
                 clip: true
-                readonly property int columns: Math.max(1, Math.floor(width / 310))
+                readonly property int columns: Math.max(1, Math.floor(width / 340))
                 cellWidth: Math.floor(width / columns)
-                cellHeight: 212
+                cellHeight: 248
                 boundsBehavior: Flickable.StopAtBounds
                 visible: !root.isBusy && !root.isIndexing && root.resultCount > 0
 
@@ -584,9 +601,10 @@ Rectangle {
                     height: catalogGridView.cellHeight
 
                     PackageCard {
-                        anchors.centerIn: parent
-                        width: catalogGridView.cellWidth - 12
-                        height: 200
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: catalogGridView.cellWidth - 16
+                        height: 236
                         theme: root.theme
                         isBusy: root.isBusy
 
@@ -631,6 +649,10 @@ Rectangle {
                         color: loadMoreMouse.containsMouse ? root.getToken("primary", "#d0bcff") : root.getToken("primaryContainer", "#4f378b")
                         border.width: 1
                         border.color: root.getToken("primary", "#d0bcff")
+
+                        scale: loadMoreMouse.pressed ? 0.96 : (loadMoreMouse.containsMouse ? 1.02 : 1.0)
+                        Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutQuad } }
+                        Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
 
                         RowLayout {
                             id: loadMoreRow

@@ -189,6 +189,7 @@ Rectangle {
 
             // Toggle "Apenas Explícitos" vs "Todos"
             Rectangle {
+                id: explicitToggleBtn
                 implicitWidth: toggleRow.implicitWidth + 20
                 height: 38
                 radius: root.getToken("radiusFull", 9999)
@@ -197,8 +198,12 @@ Rectangle {
                     root.getToken("surfaceContainer", "#201f20")
                 border.width: 1
                 border.color: root.explicitOnly ?
-                    root.getToken("primary", "#d0bcff") :
+                    root.getToken("secondary", "#ccc2dc") :
                     root.getToken("outlineVariant", "#49454f")
+
+                scale: explicitToggleMouse.pressed ? 0.96 : (explicitToggleMouse.containsMouse ? 1.02 : 1.0)
+                Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutQuad } }
+                Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
 
                 RowLayout {
                     id: toggleRow
@@ -210,7 +215,7 @@ Rectangle {
                         font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
                         font.pixelSize: 16
                         color: root.explicitOnly ?
-                            root.getToken("primary", "#d0bcff") :
+                            root.getToken("onSecondaryContainer", "#e8def8") :
                             root.getToken("onSurfaceVariant", "#cbc5ca")
                     }
 
@@ -219,11 +224,14 @@ Rectangle {
                         font.family: root.getToken("fontFamily", "Google Sans Flex")
                         font.pixelSize: 12
                         font.weight: Font.Medium
-                        color: root.getToken("onSurface", "#e6e1e1")
+                        color: root.explicitOnly ?
+                            root.getToken("onSecondaryContainer", "#e8def8") :
+                            root.getToken("onSurface", "#e6e1e1")
                     }
                 }
 
                 MouseArea {
+                    id: explicitToggleMouse
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
@@ -289,8 +297,9 @@ Rectangle {
                 id: installedGridView
                 anchors.fill: parent
                 clip: true
-                cellWidth: 334
-                cellHeight: 196
+                readonly property int columns: Math.max(1, Math.floor(width / 340))
+                cellWidth: Math.floor(width / columns)
+                cellHeight: 248
                 boundsBehavior: Flickable.StopAtBounds
                 visible: root.modelCount > 0
 
@@ -315,9 +324,10 @@ Rectangle {
                     visible: matchesFilter
 
                     PackageCard {
-                        anchors.centerIn: parent
-                        width: 320
-                        height: 184
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: installedGridView.cellWidth - 16
+                        height: 236
                         theme: root.theme
                         isBusy: root.isBusy
 

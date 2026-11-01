@@ -239,6 +239,10 @@ Rectangle {
                         border.width: 1
                         border.color: isPersActive ? root.getToken("primary", "#d0bcff") : root.getToken("outlineVariant", "#49454f")
 
+                        scale: persToggleMouse.pressed ? 0.96 : (persToggleMouse.containsMouse ? 1.02 : 1.0)
+                        Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutQuad } }
+                        Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
+
                         RowLayout {
                             id: persToggleRow
                             anchors.centerIn: parent
@@ -261,7 +265,9 @@ Rectangle {
                         }
 
                         MouseArea {
+                            id: persToggleMouse
                             anchors.fill: parent
+                            hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
                                 if (root.storeBridge && root.storeBridge.setPersonalizationEnabled) {
@@ -280,6 +286,10 @@ Rectangle {
                         color: clearHistMouse.containsMouse ? root.getToken("errorContainer", "#8c1d18") : root.getToken("surfaceContainer", "#201f20")
                         border.width: 1
                         border.color: root.getToken("outlineVariant", "#49454f")
+
+                        scale: clearHistMouse.pressed ? 0.96 : (clearHistMouse.containsMouse ? 1.02 : 1.0)
+                        Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutQuad } }
+                        Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
 
                         RowLayout {
                             id: clearHistRow
@@ -321,6 +331,10 @@ Rectangle {
                         radius: root.getToken("radiusFull", 9999)
                         color: verMaisRecMouse.containsMouse ? root.getToken("surfaceContainerHigh", "#2b2a2a") : "transparent"
 
+                        scale: verMaisRecMouse.pressed ? 0.96 : (verMaisRecMouse.containsMouse ? 1.02 : 1.0)
+                        Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutQuad } }
+                        Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
+
                         RowLayout {
                             id: verMaisRecRow
                             anchors.centerIn: parent
@@ -356,7 +370,7 @@ Rectangle {
                 ListView {
                     id: recListView
                     Layout.fillWidth: true
-                    implicitHeight: 204
+                    implicitHeight: 248
                     orientation: ListView.Horizontal
                     spacing: 14
                     clip: true
@@ -374,8 +388,8 @@ Rectangle {
                            (root.storeBridge ? root.storeBridge.featuredModel : null)
 
                     delegate: PackageCard {
-                        width: 320
-                        height: 200
+                        width: 340
+                        height: 236
                         theme: root.theme
                         isBusy: root.storeBridge ? root.storeBridge.isBusy : false
 
@@ -483,7 +497,7 @@ Rectangle {
                 ListView {
                     id: popListView
                     Layout.fillWidth: true
-                    implicitHeight: 204
+                    implicitHeight: 248
                     orientation: ListView.Horizontal
                     spacing: 14
                     clip: true
@@ -501,8 +515,8 @@ Rectangle {
                            (root.storeBridge ? root.storeBridge.featuredModel : null)
 
                     delegate: PackageCard {
-                        width: 320
-                        height: 200
+                        width: 340
+                        height: 236
                         theme: root.theme
                         isBusy: root.storeBridge ? root.storeBridge.isBusy : false
 
@@ -610,7 +624,7 @@ Rectangle {
                 ListView {
                     id: startListView
                     Layout.fillWidth: true
-                    implicitHeight: 204
+                    implicitHeight: 248
                     orientation: ListView.Horizontal
                     spacing: 14
                     clip: true
@@ -628,8 +642,8 @@ Rectangle {
                            (root.storeBridge ? root.storeBridge.featuredModel : null)
 
                     delegate: PackageCard {
-                        width: 320
-                        height: 200
+                        width: 340
+                        height: 236
                         theme: root.theme
                         isBusy: root.storeBridge ? root.storeBridge.isBusy : false
 
@@ -737,7 +751,7 @@ Rectangle {
                 ListView {
                     id: devListView
                     Layout.fillWidth: true
-                    implicitHeight: 204
+                    implicitHeight: 248
                     orientation: ListView.Horizontal
                     spacing: 14
                     clip: true
@@ -755,8 +769,8 @@ Rectangle {
                            (root.storeBridge ? root.storeBridge.featuredModel : null)
 
                     delegate: PackageCard {
-                        width: 320
-                        height: 200
+                        width: 340
+                        height: 236
                         theme: root.theme
                         isBusy: root.storeBridge ? root.storeBridge.isBusy : false
 
@@ -864,7 +878,7 @@ Rectangle {
                 ListView {
                     id: gamesListView
                     Layout.fillWidth: true
-                    implicitHeight: 204
+                    implicitHeight: 248
                     orientation: ListView.Horizontal
                     spacing: 14
                     clip: true
@@ -882,8 +896,8 @@ Rectangle {
                            (root.storeBridge ? root.storeBridge.featuredModel : null)
 
                     delegate: PackageCard {
-                        width: 320
-                        height: 200
+                        width: 340
+                        height: 236
                         theme: root.theme
                         isBusy: root.storeBridge ? root.storeBridge.isBusy : false
 
@@ -991,7 +1005,7 @@ Rectangle {
                 ListView {
                     id: designListView
                     Layout.fillWidth: true
-                    implicitHeight: 204
+                    implicitHeight: 248
                     orientation: ListView.Horizontal
                     spacing: 14
                     clip: true
@@ -1009,8 +1023,8 @@ Rectangle {
                            (root.storeBridge ? root.storeBridge.featuredModel : null)
 
                     delegate: PackageCard {
-                        width: 320
-                        height: 200
+                        width: 340
+                        height: 236
                         theme: root.theme
                         isBusy: root.storeBridge ? root.storeBridge.isBusy : false
 
@@ -1118,7 +1132,7 @@ Rectangle {
                 ListView {
                     id: commsListView
                     Layout.fillWidth: true
-                    implicitHeight: 204
+                    implicitHeight: 248
                     orientation: ListView.Horizontal
                     spacing: 14
                     clip: true
@@ -1136,8 +1150,8 @@ Rectangle {
                            (root.storeBridge ? root.storeBridge.featuredModel : null)
 
                     delegate: PackageCard {
-                        width: 320
-                        height: 200
+                        width: 340
+                        height: 236
                         theme: root.theme
                         isBusy: root.storeBridge ? root.storeBridge.isBusy : false
 

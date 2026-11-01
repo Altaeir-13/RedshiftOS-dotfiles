@@ -93,12 +93,12 @@ Rectangle {
         anchors.fill: parent
         spacing: 12
 
-        // 1. Caixa de Entrada da Pesquisa (Search Box)
+        // 1. Caixa de Entrada da Pesquisa com Alta Dominância Visual
         Rectangle {
             id: searchBox
             Layout.fillWidth: true
-            Layout.maximumWidth: 520
-            Layout.preferredWidth: 380
+            Layout.maximumWidth: 620
+            Layout.preferredWidth: 440
             Layout.preferredHeight: 44
             radius: root.getToken("radiusFull", 9999)
             color: searchBoxMouseArea.containsMouse || searchInput.activeFocus ?
@@ -109,8 +109,8 @@ Rectangle {
                 root.getToken("primary", "#d0bcff") :
                 root.getToken("outlineVariant", "#49454f")
 
-            Behavior on color { ColorAnimation { duration: 150 } }
-            Behavior on border.color { ColorAnimation { duration: 150 } }
+            Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
+            Behavior on border.color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
 
             RowLayout {
                 anchors.fill: parent
@@ -121,7 +121,7 @@ Rectangle {
                 Text {
                     text: "search"
                     font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
-                    font.pixelSize: 20
+                    font.pixelSize: 22
                     color: searchInput.activeFocus ?
                         root.getToken("primary", "#d0bcff") :
                         root.getToken("onSurfaceVariant", "#cbc5ca")
@@ -211,7 +211,7 @@ Rectangle {
             }
         }
 
-        // 2. Chips de Filtro Rápido de Origem (Todos / Oficial / AUR)
+        // 2. Chips de Filtro Rápido de Origem (Mais discretos para não competirem com o campo de texto)
         RowLayout {
             spacing: 6
 
@@ -228,8 +228,8 @@ Rectangle {
                     readonly property bool isSelected: root.sourceFilter === modelData.id
                     readonly property bool isHovered: chipMouseArea.containsMouse
 
-                    implicitWidth: chipRow.implicitWidth + 24
-                    implicitHeight: 36
+                    implicitWidth: chipRow.implicitWidth + 20
+                    implicitHeight: 32
                     radius: root.getToken("radiusFull", 9999)
 
                     color: {
@@ -240,7 +240,7 @@ Rectangle {
                         }
                         return isHovered ?
                             root.getToken("surfaceContainerHigh", "#2b2a2a") :
-                            root.getToken("surfaceContainer", "#201f20");
+                            root.getToken("surfaceContainerLow", "#1c1b1c");
                     }
 
                     border.width: 1
@@ -248,31 +248,36 @@ Rectangle {
                         (modelData.id === "aur" ? root.getToken("tertiary", "#efb8c8") : root.getToken("primary", "#d0bcff")) :
                         root.getToken("outlineVariant", "#49454f")
 
-                    Behavior on color { ColorAnimation { duration: 150 } }
-                    Behavior on border.color { ColorAnimation { duration: 150 } }
+                    scale: chipMouseArea.pressed ? 0.96 : (chip.isHovered && !chip.isSelected ? 1.02 : 1.0)
+
+                    Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
+                    Behavior on border.color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
+                    Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutQuad } }
 
                     RowLayout {
                         id: chipRow
                         anchors.centerIn: parent
-                        spacing: 6
+                        spacing: 5
 
                         Text {
                             text: chip.modelData.icon
                             font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
-                            font.pixelSize: 16
+                            font.pixelSize: 14
                             color: chip.isSelected ?
-                                (chip.modelData.id === "aur" ? root.getToken("tertiary", "#efb8c8") : root.getToken("primary", "#d0bcff")) :
-                                root.getToken("onSurfaceVariant", "#cbc5ca")
+                                (chip.modelData.id === "aur" ? root.getToken("onTertiaryContainer", "#ffd8e4") : root.getToken("onSecondaryContainer", "#e8def8")) :
+                                (chip.isHovered ? root.getToken("onSurface", "#e6e1e1") : root.getToken("onSurfaceVariant", "#cbc5ca"))
+                            Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
                         }
 
                         Text {
                             text: chip.modelData.label
                             font.family: root.getToken("fontFamily", "Google Sans Flex")
-                            font.pixelSize: 12
+                            font.pixelSize: 11
                             font.weight: chip.isSelected ? Font.Medium : Font.Normal
                             color: chip.isSelected ?
-                                root.getToken("onSurface", "#e6e1e1") :
-                                root.getToken("onSurfaceVariant", "#cbc5ca")
+                                (chip.modelData.id === "aur" ? root.getToken("onTertiaryContainer", "#ffd8e4") : root.getToken("onSecondaryContainer", "#e8def8")) :
+                                (chip.isHovered ? root.getToken("onSurface", "#e6e1e1") : root.getToken("onSurfaceVariant", "#cbc5ca"))
+                            Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
                         }
                     }
 
@@ -342,7 +347,7 @@ Rectangle {
             border.color: root.getToken("outlineVariant", "#49454f")
             opacity: root.isBusy ? 0.6 : 1.0
 
-            Behavior on color { ColorAnimation { duration: 150 } }
+            Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
 
             Text {
                 id: refreshIcon

@@ -107,8 +107,8 @@ Rectangle {
     readonly property bool isAur: root.source === "aur" || root.repository === "aur"
     readonly property bool isHovered: cardMouseArea.containsMouse
 
-    implicitWidth: 320
-    implicitHeight: 200
+    implicitWidth: 340
+    implicitHeight: 236
     radius: root.getToken("radiusNormal", 14)
 
     color: isHovered ?
@@ -120,23 +120,23 @@ Rectangle {
         (root.isAur ? root.getToken("tertiary", "#efb8c8") : root.getToken("primary", "#d0bcff")) :
         root.getToken("outlineVariant", "#49454f")
 
-    Behavior on color { ColorAnimation { duration: 180; easing.type: Easing.OutQuad } }
-    Behavior on border.color { ColorAnimation { duration: 180; easing.type: Easing.OutQuad } }
+    Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+    Behavior on border.color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
 
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 14
         spacing: 8
 
-        // 1. Linha Superior: Avatar/Ícone + Nomes + Repositório + Botão Favorito
+        // 1. Linha Superior: Avatar/Ícone (46x46) + Nomes + Repositório + Botão Favorito
         RowLayout {
             Layout.fillWidth: true
-            spacing: 10
+            spacing: 12
 
             // Avatar / Emblema da Categoria ou Ícone XDG Real
             Rectangle {
-                width: 44
-                height: 44
+                width: 46
+                height: 46
                 radius: root.getToken("radiusNormal", 14)
                 color: root.isAur ?
                     root.getToken("tertiaryContainer", "#633b48") :
@@ -145,8 +145,8 @@ Rectangle {
                 Image {
                     id: pkgIconImage
                     anchors.centerIn: parent
-                    width: 28
-                    height: 28
+                    width: 30
+                    height: 30
                     sourceSize: Qt.size(64, 64)
                     smooth: true
                     mipmap: true
@@ -159,14 +159,14 @@ Rectangle {
                     visible: pkgIconImage.status !== Image.Ready
                     text: root.getCategoryGlyph(root.category)
                     font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
-                    font.pixelSize: 24
+                    font.pixelSize: 26
                     color: root.isAur ?
                         root.getToken("onTertiaryContainer", "#ffd8e4") :
                         root.getToken("onPrimaryContainer", "#eaddff")
                 }
             }
 
-            // Título e Nome do Pacote
+            // Título e Nome do Pacote (Hierarquia visual superior)
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
@@ -178,14 +178,14 @@ Rectangle {
                     Text {
                         text: root.displayName && root.displayName.length > 0 ? root.displayName : root.pkgName
                         font.family: root.getToken("fontFamily", "Google Sans Flex")
-                        font.pixelSize: 14
+                        font.pixelSize: 15
                         font.weight: Font.DemiBold
                         color: root.getToken("onSurface", "#e6e1e1")
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
 
-                    // Badge de Repositório (core, extra, multilib, aur)
+                    // Badge de Repositório Compacto e Discreto (core, extra, aur)
                     Rectangle {
                         implicitWidth: repoText.implicitWidth + 8
                         height: 18
@@ -208,6 +208,7 @@ Rectangle {
                     }
                 }
 
+                // Segunda linha: Versão secundária sutil
                 Text {
                     Layout.fillWidth: true
                     text: root.pkgName + (root.version && root.version.length > 0 ? " • " + root.version : "")
@@ -219,7 +220,7 @@ Rectangle {
                 }
             }
 
-            // Botão de Favorito Discreto
+            // Botão de Favorito Discreto (28x28px circular)
             Rectangle {
                 id: favButton
                 width: 28
@@ -232,7 +233,7 @@ Rectangle {
                     anchors.centerIn: parent
                     text: root.isFavorite ? "favorite" : "favorite_border"
                     font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
-                    font.pixelSize: 17
+                    font.pixelSize: 18
                     color: root.isFavorite ?
                         root.getToken("tertiary", "#efb8c8") :
                         (favMouseArea.containsMouse ? root.getToken("onSurface", "#e6e1e1") : root.getToken("onSurfaceVariant", "#cbc5ca"))
@@ -272,13 +273,13 @@ Rectangle {
                 font.pixelSize: 10
                 font.weight: Font.Medium
                 color: root.getToken("onSurfaceVariant", "#cbc5ca")
-                opacity: 0.9
+                opacity: 0.85
                 elide: Text.ElideRight
                 Layout.fillWidth: true
             }
         }
 
-        // 3. Resumo / Descrição (2 linhas com elide)
+        // 3. Resumo / Descrição (Até 3 linhas com elide e espaço de leitura real)
         Text {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -287,62 +288,21 @@ Rectangle {
             font.pixelSize: 12
             color: root.getToken("onSurfaceVariant", "#cbc5ca")
             wrapMode: Text.WordWrap
-            maximumLineCount: 2
+            maximumLineCount: 3
             elide: Text.ElideRight
             lineHeight: 1.25
         }
 
-        // 4. Rodapé do Card: Popularidade + Estado (Instalado / Disponível) + Botão de Ação Rápida
+        // 4. Rodapé Organizado: Estado + Indicador Secundário + Botão de Ação Rápida
         RowLayout {
             Layout.fillWidth: true
             spacing: 8
-
-            // Rótulo confiável de Popularidade (pkgstats ou AUR)
-            RowLayout {
-                visible: root.popularityLabel && root.popularityLabel.length > 0
-                spacing: 4
-
-                Text {
-                    text: root.isAur ? "thumb_up" : "analytics"
-                    font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
-                    font.pixelSize: 13
-                    color: root.isAur ? root.getToken("tertiary", "#efb8c8") : root.getToken("primary", "#d0bcff")
-                }
-
-                Text {
-                    text: root.popularityLabel
-                    font.family: root.getToken("monoFontFamily", "JetBrains Mono NF")
-                    font.pixelSize: 10
-                    color: root.getToken("onSurfaceVariant", "#cbc5ca")
-                    elide: Text.ElideRight
-                }
-            }
-
-            // Fallback de Votos AUR se não tiver popularityLabel
-            RowLayout {
-                visible: root.isAur && (!root.popularityLabel || root.popularityLabel.length === 0)
-                spacing: 4
-
-                Text {
-                    text: "thumb_up"
-                    font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
-                    font.pixelSize: 13
-                    color: root.getToken("tertiary", "#efb8c8")
-                }
-
-                Text {
-                    text: root.votes.toString()
-                    font.family: root.getToken("monoFontFamily", "JetBrains Mono NF")
-                    font.pixelSize: 10
-                    color: root.getToken("onSurfaceVariant", "#cbc5ca")
-                }
-            }
 
             // Badge de Estado: "Instalado" (ou "Atualização") se instalado, ou "Disponível" se não instalado
             Rectangle {
                 visible: root.installed
                 implicitWidth: statusText.implicitWidth + 12
-                height: 20
+                height: 22
                 radius: root.getToken("radiusFull", 9999)
                 color: root.updateAvailable ?
                     root.getToken("warningContainer", "#594800") :
@@ -358,8 +318,8 @@ Rectangle {
                         font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
                         font.pixelSize: 12
                         color: root.updateAvailable ?
-                            root.getToken("warning", "#fbc02d") :
-                            root.getToken("success", "#b5ccba")
+                            root.getToken("onWarningContainer", "#ffe082") :
+                            root.getToken("onSuccessContainer", "#d1e9d6")
                     }
 
                     Text {
@@ -377,7 +337,7 @@ Rectangle {
             Rectangle {
                 visible: !root.installed
                 implicitWidth: dispText.implicitWidth + 12
-                height: 20
+                height: 22
                 radius: root.getToken("radiusFull", 9999)
                 color: root.getToken("surfaceContainerHighest", "#363435")
                 border.width: 1
@@ -406,15 +366,55 @@ Rectangle {
                 }
             }
 
+            // Indicador Secundário mais relevante (Popularidade pkgstats ou Votos AUR, sem chips concorrentes)
+            RowLayout {
+                visible: root.popularityLabel && root.popularityLabel.length > 0
+                spacing: 4
+
+                Text {
+                    text: root.isAur ? "thumb_up" : "analytics"
+                    font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
+                    font.pixelSize: 12
+                    color: root.isAur ? root.getToken("tertiary", "#efb8c8") : root.getToken("primary", "#d0bcff")
+                }
+
+                Text {
+                    text: root.popularityLabel
+                    font.family: root.getToken("monoFontFamily", "JetBrains Mono NF")
+                    font.pixelSize: 10
+                    color: root.getToken("onSurfaceVariant", "#cbc5ca")
+                    elide: Text.ElideRight
+                }
+            }
+
+            RowLayout {
+                visible: (!root.popularityLabel || root.popularityLabel.length === 0) && root.isAur && root.votes > 0
+                spacing: 4
+
+                Text {
+                    text: "thumb_up"
+                    font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
+                    font.pixelSize: 12
+                    color: root.getToken("tertiary", "#efb8c8")
+                }
+
+                Text {
+                    text: root.votes.toString()
+                    font.family: root.getToken("monoFontFamily", "JetBrains Mono NF")
+                    font.pixelSize: 10
+                    color: root.getToken("onSurfaceVariant", "#cbc5ca")
+                }
+            }
+
             Item {
                 Layout.fillWidth: true
             }
 
-            // Botão Rápido de Ação (Instalar / Atualizar / Desinstalar)
+            // Botão Rápido de Ação (Instalar / Atualizar / Desinstalar) com largura consistente
             Rectangle {
                 id: actionButton
-                implicitWidth: actionRow.implicitWidth + 18
-                height: 30
+                implicitWidth: Math.max(96, actionRow.implicitWidth + 20)
+                height: 32
                 radius: root.getToken("radiusFull", 9999)
 
                 readonly property bool btnHovered: actionMouseArea.containsMouse
@@ -447,7 +447,9 @@ Rectangle {
                     return "transparent";
                 }
 
-                Behavior on color { ColorAnimation { duration: 150 } }
+                scale: actionMouseArea.pressed ? 0.96 : (actionButton.btnHovered ? 1.02 : 1.0)
+                Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutQuad } }
+                Behavior on color { ColorAnimation { duration: 150; easing.type: Easing.OutQuad } }
 
                 RowLayout {
                     id: actionRow
@@ -464,10 +466,12 @@ Rectangle {
                         font.family: root.getToken("iconFontFamily", "Material Symbols Rounded")
                         font.pixelSize: 14
                         color: {
-                            if (actionButton.actionType === "remove") return root.getToken("error", "#f2b8b5");
-                            if (actionButton.actionType === "update") return root.getToken("onPrimaryContainer", "#eaddff");
+                            if (actionButton.actionType === "remove") return root.getToken("onErrorContainer", "#f9dedc");
+                            if (actionButton.actionType === "update" || actionButton.actionType === "install") {
+                                return actionButton.btnHovered ? root.getToken("onPrimary", "#381e72") : root.getToken("onPrimaryContainer", "#eaddff");
+                            }
                             if (actionButton.actionType === "installed") return root.getToken("onSurfaceVariant", "#cbc5ca");
-                            return root.getToken("onPrimaryContainer", "#eaddff");
+                            return actionButton.btnHovered ? root.getToken("onPrimary", "#381e72") : root.getToken("onPrimaryContainer", "#eaddff");
                         }
                     }
 
@@ -485,9 +489,11 @@ Rectangle {
                         font.weight: Font.DemiBold
                         color: {
                             if (actionButton.actionType === "remove") return root.getToken("onErrorContainer", "#f9dedc");
-                            if (actionButton.actionType === "update") return root.getToken("onPrimaryContainer", "#eaddff");
+                            if (actionButton.actionType === "update" || actionButton.actionType === "install") {
+                                return actionButton.btnHovered ? root.getToken("onPrimary", "#381e72") : root.getToken("onPrimaryContainer", "#eaddff");
+                            }
                             if (actionButton.actionType === "installed") return root.getToken("onSurface", "#e6e1e1");
-                            return root.getToken("onPrimaryContainer", "#eaddff");
+                            return actionButton.btnHovered ? root.getToken("onPrimary", "#381e72") : root.getToken("onPrimaryContainer", "#eaddff");
                         }
                     }
                 }

@@ -256,9 +256,9 @@ QtObject {
     // Animation Timings (in Milliseconds)
     // -----------------------------------------------------------------------
 
-    readonly property int animFast: 180
-    readonly property int animNormal: 300
-    readonly property int animSlow: 450
+    readonly property int animFast: 140
+    readonly property int animNormal: 180
+    readonly property int animSlow: 300
 
     // -----------------------------------------------------------------------
     // Color Manipulation Utilities

@@ -8,18 +8,25 @@ import qs.utils
 Item {
     id: root
 
-    // Bar clickable area reference: 36-44px
+    property ScreenState screenState: null
+
     implicitWidth: Tokens.sizes.bar.innerWidth
     implicitHeight: Tokens.sizes.bar.innerWidth
+    width: implicitWidth
+    height: implicitHeight
 
-    MouseArea {
-        id: mouseArea
-        anchors.fill: parent
+    StateLayer {
+        anchors.fill: undefined
+        anchors.centerIn: parent
+        implicitWidth: implicitHeight
+        implicitHeight: Tokens.sizes.bar.innerWidth
+        radius: Tokens.rounding.full
         cursorShape: Qt.PointingHandCursor
-        hoverEnabled: true
         onClicked: {
-            const screenState = ShellState.forActive();
-            screenState.launcher = !screenState.launcher;
+            const s = root.screenState ?? ShellState.forActive();
+            if (s) {
+                s.launcher = !s.launcher;
+            }
         }
     }
 
@@ -55,7 +62,7 @@ Item {
 
             layer.enabled: true
             layer.effect: Colouriser {
-                colorizationColor: Colours.palette.m3primary
+                colorizationColor: (root.screenState?.launcher) ? Colours.palette.m3primary : Colours.palette.m3primary
             }
         }
     }

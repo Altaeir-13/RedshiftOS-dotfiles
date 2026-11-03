@@ -34,6 +34,7 @@ from .security import (
     build_safe_yay_install_cmd,
     build_safe_yay_sysupgrade_cmd,
     ensure_polkit_agent,
+    get_privilege_env,
     is_pacman_locked,
 )
 
@@ -59,6 +60,7 @@ PROMPT_RE = re.compile(
     r"(\[[Yy]/[Nn]\]|\[[Ss]/[Nn]\]|\[[Yy][Ee][Ss]/[Nn][Oo]\]|"
     r"Proceed with (?:install|installation|upgrade|removal)\?|Continuar a (?:instalação|atualização|remoção)\?|"
     r"Packages to cleanBuild\?|Pacotes para construir|"
+    r"Packages to exclude|Pacotes para excluir|"
     r"Diffs to show\?|Diffs para mostrar\?|"
     r"PKGBUILDs to edit\?|PKGBUILDs para editar\?|"
     r"\[N\]one\s+\[A\]ll\s+\[Ab\]ort|"
@@ -527,6 +529,10 @@ class TransactionService(QObject):
 
         if self._process and self._process.state() == QProcess.ProcessState.Running:
             self._process.write(line_to_send.encode("utf-8"))
+            # Drop the answered prompt so it can't be re-detected from stale buffered text
+            # and so the next output line isn't glued to the old "==> " fragment.
+            self._stdout_buffer = ""
+            self._recent_lines = []
             self._clear_prompt_state()
             return True
 
@@ -591,8 +597,10 @@ class TransactionService(QObject):
             self._start_mock_simulation(action, packages, cmd)
             return True
 
-        # Ensure a graphical Polkit agent is active in user session (e.g. Caelestia)
-        ensure_polkit_agent()
+        privilege_env = get_privilege_env(cmd)
+        if not privilege_env:
+            # pkexec backend: ensure a graphical Polkit agent is active in the user session (e.g. Caelestia)
+            ensure_polkit_agent()
 
         self._process = QProcess(self)
         self._process.setProgram(cmd[0])
@@ -604,6 +612,9 @@ class TransactionService(QObject):
         env.insert("PAGER", "cat")
         env.insert("SYSTEMD_PAGER", "cat")
         env.insert("TERM", "dumb")
+        for key, value in privilege_env.items():
+            # e.g. SUDO_ASKPASS: sudo -A asks the password once through a graphical dialog
+            env.insert(key, value)
         self._process.setProcessEnvironment(env)
 
         self._process.readyReadStandardOutput.connect(self._on_stdout_ready)
@@ -677,6 +688,17 @@ class TransactionService(QObject):
                         prompt_found = True
                         detected_text = f"{prev} {clean_buf}".strip()
                         break
+                if not prompt_found and clean_buf == "==>":
+                    # Generic fallback: yay always ends its interactive menus with a bare "==>"
+                    # on an unterminated line. Any unknown menu would otherwise block silently
+                    # forever (the process is waiting on stdin), so surface it to the user.
+                    context = next(
+                        (l for l in reversed(self._recent_lines) if l.startswith("==>")),
+                        "",
+                    )
+                    detected_text = (context or "O gerenciador de pacotes aguarda uma resposta") + " " + clean_buf
+                    detected_text = detected_text.strip()
+                    prompt_found = True
 
         # 2. Check last complete line if buffer alone did not trigger
         if not prompt_found and self._recent_lines:
@@ -686,12 +708,37 @@ class TransactionService(QObject):
                 detected_text = last_line
 
         if prompt_found:
+            changed = not self._waiting_for_input or detected_text != self._current_prompt_text
             self._waiting_for_input = True
             self._current_prompt_text = detected_text
-            self.promptChanged.emit()
+            if changed:
+                # The prompt lives in an unterminated line, so it never reaches the log by itself.
+                self.logLineReceived.emit(f"[AGUARDANDO RESPOSTA] {detected_text}")
+                self.promptChanged.emit()
+
+            # Auto-confirm standard "Proceed with installation/upgrade" prompts so the user doesn't
+            # need to press any button or type in the terminal (native App Store automated experience).
+            lower_prompt = detected_text.lower()
+            if any(term in lower_prompt for term in (
+                "proceed with",
+                "continuar a instalação",
+                "continuar a actualização",
+                "continuar a atualização",
+                ":: proceed",
+                ":: continuar",
+            )):
+                logger.info("Auto-confirming installation prompt: %s", detected_text)
+                self.logLineReceived.emit("[AUTO-CONFIRMAÇÃO] Prosseguindo automaticamente com a operação...")
+                QTimer.singleShot(60, lambda: self.send_input("y"))
 
     def _on_process_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
         """Handle transaction process termination."""
+        # Clean up temporary sudo timestamp cache on transaction end
+        try:
+            subprocess.run(["/usr/bin/sudo", "-k"], capture_output=True, timeout=2, check=False)
+        except Exception:
+            pass
+
         action = self._current_action
         is_success = (exit_code == 0) and (exit_status == QProcess.ExitStatus.NormalExit)
 
@@ -757,7 +804,7 @@ class TransactionService(QObject):
 
             # Check for Polkit dismissal/cancellation or denial
             polkit_denied = (exit_code in (126, 127)) or any(
-                any(term in l.lower() for term in ("request dismissed", "not authorized", "authentication failed", "autorização recusada"))
+                any(term in l.lower() for term in ("request dismissed", "not authorized", "authentication failed", "autorização recusada", "no password was provided", "incorrect password", "a password is required"))
                 for l in self._recent_lines
             )
             if polkit_denied:

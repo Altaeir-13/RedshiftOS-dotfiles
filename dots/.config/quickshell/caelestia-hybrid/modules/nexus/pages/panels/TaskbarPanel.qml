@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick.Layouts
 import Caelestia.Config
 import Caelestia.I18n
+import qs.services
 import qs.modules.nexus.common
 
 PageBase {
@@ -89,6 +90,41 @@ PageBase {
             text: Tr.tr("Clock")
             subtext: Tr.tr("Date, icon, background")
             onClicked: root.nState.openSubPage(10)
+        }
+
+        // Panel buttons
+        SectionHeader {
+            text: Tr.tr("Panel buttons")
+        }
+
+        ToggleRow {
+            first: true
+            text: Tr.tr("Launcher icon")
+            subtext: Tr.tr("Show Redshift emblem launcher button")
+            checked: BarEntries.isEntryEnabled("logo")
+            onToggled: BarEntries.setEntryEnabled("logo", checked)
+        }
+
+        ToggleRow {
+            text: Tr.tr("Dashboard button")
+            subtext: Tr.tr("Show dashboard panel toggle button")
+            checked: BarEntries.isEntryEnabled("dashboard")
+            onToggled: BarEntries.setEntryEnabled("dashboard", checked)
+        }
+
+        ToggleRow {
+            text: Tr.tr("Sidebar button")
+            subtext: Tr.tr("Show notifications and sidebar panel toggle button")
+            checked: BarEntries.isEntryEnabled("sidebar")
+            onToggled: BarEntries.setEntryEnabled("sidebar", checked)
+        }
+
+        ToggleRow {
+            last: true
+            text: Tr.tr("UI switch button")
+            subtext: Tr.tr("Show end-4 / Caelestia shell switcher button")
+            checked: BarEntries.isEntryEnabled("uiSwitch")
+            onToggled: BarEntries.setEntryEnabled("uiSwitch", checked)
         }
 
         // Scroll actions

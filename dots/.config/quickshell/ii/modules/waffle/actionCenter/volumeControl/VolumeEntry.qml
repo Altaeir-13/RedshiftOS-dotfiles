@@ -49,6 +49,7 @@ RowLayout {
         Layout.fillWidth: true
         Layout.rightMargin: 10
         value: root.node?.audio.volume ?? 0
+        to: 1.5
         onMoved: root.node.audio.volume = value
     }
 }

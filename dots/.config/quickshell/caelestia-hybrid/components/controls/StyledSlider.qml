@@ -174,12 +174,12 @@ Slider {
         onPositionChanged: e => {
             dragMovement = (e.x - pressStartX) / width;
             if (root.interactionOnMove)
-                root.interaction(posBinding.value);
+                root.interaction(root.from + posBinding.value * (root.to - root.from));
         }
         onReleased: e => {
             const clickPos = e.x / width;
             const finalPos = mouse.dragMovement !== 0 ? posBinding.value : CUtils.clamp(clickPos, 0, 1);
-            root.interaction(finalPos);
+            root.interaction(root.from + finalPos * (root.to - root.from));
             widthBehavior.enabled = true;
             dragMovement = 0;
         }

@@ -12,6 +12,8 @@ CUSTOM_FILES=(
     "HYBRID_MANIFEST.md"
     "UPSTREAM_REVISION"
     "modules/VideoWallpaperBridge.qml"
+    "modules/bar/components/DashboardButton.qml"
+    "modules/bar/components/SidebarButton.qml"
     "modules/bar/components/UiFrontendSwitchButton.qml"
     "modules/bar/popouts/StatusCenter.qml"
     "modules/nexus/pages/wallandstyle/PaletteVariantSelector.qml"
@@ -21,6 +23,7 @@ CUSTOM_FILES=(
     "scripts/gamemode.sh"
     "scripts/nightlight.sh"
     "scripts/video-wallpaper-sync.sh"
+    "services/BarEntries.qml"
 )
 
 MODIFIED_FILES=(
@@ -37,7 +40,14 @@ MODIFIED_FILES=(
     "modules/drawers/Panels.qml"
     "modules/lock/Fetch.qml"
     "modules/lock/center/ProfilePic.qml"
+    "modules/nexus/common/AnimatedLogo.qml"
+    "modules/nexus/pages/AboutPage.qml"
     "modules/nexus/pages/WallpaperAndStyle.qml"
+    "modules/nexus/pages/panels/DashboardPanel.qml"
+    "modules/nexus/pages/panels/LauncherPanel.qml"
+    "modules/nexus/pages/panels/SidebarPanel.qml"
+    "modules/nexus/pages/panels/TaskbarPanel.qml"
+    "modules/nexus/pages/panels/UtilitiesPanel.qml"
     "modules/nexus/pages/wallandstyle/ColourSelect.qml"
     "modules/session/Content.qml"
     "modules/utilities/Wrapper.qml"

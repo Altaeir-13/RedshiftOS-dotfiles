@@ -37,6 +37,8 @@ StyledRect {
     function collapsed(entry: var): bool {
         if (entry.id === "lockStatus")
             return !Hypr.capsLock && !Hypr.numLock;
+        if (entry.id === "kbLayout")
+            return !Config.utilities.enabled;
         return false;
     }
 
@@ -161,12 +163,13 @@ StyledRect {
         default property Item item
         property string name: modelData.id.toLowerCase()
 
+        visible: present
         Layout.topMargin: Math.round(topGap)
         Layout.bottomMargin: Math.round(bottomGap)
         Layout.alignment: Qt.AlignHCenter
 
-        implicitWidth: item?.implicitWidth ?? 0
-        implicitHeight: item?.implicitHeight ?? 0
+        implicitWidth: present ? (item?.implicitWidth ?? 0) : 0
+        implicitHeight: present ? (item?.implicitHeight ?? 0) : 0
 
         children: item
 

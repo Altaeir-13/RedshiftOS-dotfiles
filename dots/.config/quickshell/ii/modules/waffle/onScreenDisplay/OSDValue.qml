@@ -12,6 +12,7 @@ WBarAttachedPanelContent {
     id: root
     required property string iconName
     property real value
+    property alias to: progressBar.to
     property bool showNumber: true
 
     property Timer timer: Timer {

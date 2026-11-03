@@ -185,30 +185,33 @@ class TestSecurityGuardrails(unittest.TestCase):
             cmd_sysup = build_safe_pacman_sysupgrade_cmd()
             self.assertEqual(cmd_sysup[:3], ["/usr/bin/pkexec", "/usr/bin/pacman", "-Syu"])
 
-            # 4. Yay install (H-BACK1: --cleanmenu and --diffmenu preserved, never --answerclean/--answerdiff None)
+            # 4. Yay install: non-interactive (clean build All, no diff None, single password elevation)
             cmd_yay_inst = build_safe_yay_install_cmd(["visual-studio-code-bin"])
             self.assertEqual(cmd_yay_inst[0], "/usr/bin/yay")
             self.assertIn("--sudo", cmd_yay_inst)
             sudo_idx = cmd_yay_inst.index("--sudo")
-            self.assertEqual(cmd_yay_inst[sudo_idx + 1], "/usr/bin/pkexec")
-            self.assertIn("--cleanmenu", cmd_yay_inst)
-            self.assertIn("--diffmenu", cmd_yay_inst)
-            self.assertNotIn("--answerclean", cmd_yay_inst)
-            self.assertNotIn("--answerdiff", cmd_yay_inst)
+            sudo_val = cmd_yay_inst[sudo_idx + 1]
+            self.assertTrue(sudo_val.endswith("redshift-sudo") or sudo_val == "/usr/bin/pkexec")
+            self.assertIn("--answerclean", cmd_yay_inst)
+            self.assertEqual(cmd_yay_inst[cmd_yay_inst.index("--answerclean") + 1], "All")
+            self.assertIn("--answerdiff", cmd_yay_inst)
+            self.assertEqual(cmd_yay_inst[cmd_yay_inst.index("--answerdiff") + 1], "None")
             self.assertIn("--", cmd_yay_inst)
             dash_idx = cmd_yay_inst.index("--")
             self.assertEqual(cmd_yay_inst[dash_idx + 1 :], ["visual-studio-code-bin"])
 
-            # 5. Yay sysupgrade (H-BACK1: --cleanmenu and --diffmenu preserved, safe -Syu full upgrade)
+            # 5. Yay sysupgrade: non-interactive (clean build All, no diff None, safe -Syu full upgrade)
             cmd_yay_sys = build_safe_yay_sysupgrade_cmd()
             self.assertEqual(cmd_yay_sys[0], "/usr/bin/yay")
             self.assertIn("-Syu", cmd_yay_sys)
             self.assertNotIn("-Sua", cmd_yay_sys)
             self.assertIn("--sudo", cmd_yay_sys)
-            self.assertIn("--cleanmenu", cmd_yay_sys)
-            self.assertIn("--diffmenu", cmd_yay_sys)
-            self.assertNotIn("--answerclean", cmd_yay_sys)
-            self.assertNotIn("--answerdiff", cmd_yay_sys)
+            self.assertIn("--answerclean", cmd_yay_sys)
+            self.assertEqual(cmd_yay_sys[cmd_yay_sys.index("--answerclean") + 1], "All")
+            self.assertIn("--answerdiff", cmd_yay_sys)
+            self.assertEqual(cmd_yay_sys[cmd_yay_sys.index("--answerdiff") + 1], "None")
+            ans_idx = cmd_yay_sys.index("--answerupgrade")
+            self.assertEqual(cmd_yay_sys[ans_idx + 1], "None")
 
             # 6. Verify --noconfirm is never forced in any safe command builder
             for cmd in (cmd_inst, cmd_rem, cmd_sysup, cmd_yay_inst, cmd_yay_sys):
@@ -1165,6 +1168,11 @@ class TestRedshiftStoreScenariosAtoG(unittest.TestCase):
 
             # Controller should reflect the catalog status
             ctrl.search("unknown-uncached-aur-package-xyz", source_filter="aur")
+            # Real-mode searches run off the GUI thread; wait for the result to be applied.
+            t0 = time.time()
+            while ctrl.catalogStatus != "network_error" and time.time() - t0 < 10.0:
+                get_qt_app().processEvents()
+                time.sleep(0.02)
             self.assertEqual(ctrl.catalogStatus, "network_error")
 
     def test_scenario_f_36_official_updates_zero_aur_and_mixed_updates_and_anti_partial_upgrade(self) -> None:
@@ -1830,6 +1838,75 @@ class TestHyprlandConfigRegression(unittest.TestCase):
             data_ok = json.loads(res_ok.stdout)
             errs_ok = [c for c in data_ok.get("checks", []) if c.get("status") == "ERROR"]
             self.assertEqual(len(errs_ok), 0, f"Expected 0 errors for render_power=4, got: {errs_ok}")
+
+
+# =============================================================================
+# Regression: "Atualizar Tudo" travado em prompt desconhecido do yay
+# =============================================================================
+class TestUpdateAllPromptHangRegression(unittest.TestCase):
+    """A real (non-mock) transaction must surface yay's menus instead of hanging silently."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = get_qt_app()
+
+    def _run_fake_yay(self, script_body: str, answers: list[str], timeout: float = 10.0):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "yay"
+            fake.write_text("#!/usr/bin/env bash\n" + script_body, encoding="utf-8")
+            fake.chmod(0o755)
+            env = {"REDSHIFT_YAY_BIN": str(fake), "REDSHIFT_PKEXEC_BIN": "/usr/bin/pkexec"}
+            with patch.dict(os.environ, env), patch(
+                "backend.transaction_service.ensure_polkit_agent", return_value=True
+            ), patch("backend.transaction_service.is_pacman_locked", return_value=False):
+                tx = TransactionService(mock_mode=False)
+                prompts: list[str] = []
+                finished: list[tuple] = []
+                pending = list(answers)
+
+                def on_prompt() -> None:
+                    if tx.waiting_for_input and pending:
+                        prompts.append(tx.current_prompt_text)
+                        ans = pending.pop(0)
+                        tx.send_input(ans)
+
+                tx.promptChanged.connect(on_prompt)
+                tx.transactionFinished.connect(lambda *a: finished.append(a))
+                with patch.object(TransactionService, "_get_installed_package_version", return_value=None):
+                    self.assertTrue(tx.update_all())
+                    t0 = time.time()
+                    while not finished and time.time() - t0 < timeout:
+                        self.app.processEvents()
+                        time.sleep(0.02)
+                return tx, prompts, finished
+
+    def test_bare_yay_menu_prompt_is_detected_and_answerable(self) -> None:
+        body = (
+            'echo ":: 3 packages to upgrade/install."\n'
+            'echo "==> Packages to exclude: (eg: \\"1 2 3\\")"\n'
+            'printf "==> "\n'
+            "read -r a\n"
+            'echo "answer=[$a]"\n'
+        )
+        tx, prompts, finished = self._run_fake_yay(body, [""])
+        self.assertTrue(finished, "transaction hung waiting for an unrecognised yay prompt")
+        self.assertTrue(finished[0][0])
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("Packages to exclude", prompts[0])
+
+    def test_completely_unknown_bare_menu_still_surfaces_prompt(self) -> None:
+        body = 'echo "==> Some brand new yay question?"\nprintf "==> "\nread -r a\n'
+        tx, prompts, finished = self._run_fake_yay(body, ["x"])
+        self.assertTrue(finished, "transaction hung on a generic '==>' prompt")
+        self.assertIn("brand new yay question", prompts[0])
+
+    def test_answered_prompt_is_not_redetected(self) -> None:
+        body = 'printf "Proceed with installation? [Y/n] "\nread -r a\necho "done $a" >&2\nsleep 0.3\n'
+        tx, prompts, finished = self._run_fake_yay(body, ["y"])
+        self.assertTrue(finished)
+        self.assertEqual(len(prompts), 1)
+        self.assertFalse(tx.waiting_for_input)
+
 
 if __name__ == "__main__":
     unittest.main()

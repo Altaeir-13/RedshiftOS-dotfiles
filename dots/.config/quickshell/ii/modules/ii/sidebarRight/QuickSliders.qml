@@ -73,6 +73,7 @@ Rectangle {
             sourceComponent: QuickSlider {
                 materialSymbol: "volume_up"
                 value: Audio.sink.audio.volume
+                to: 1.5
                 onMoved: {
                     Audio.sink.audio.volume = value
                 }
@@ -89,6 +90,7 @@ Rectangle {
             sourceComponent: QuickSlider {
                 materialSymbol: "mic"
                 value: Audio.source.audio.volume
+                to: 1.5
                 onMoved: {
                     Audio.source.audio.volume = value
                 }

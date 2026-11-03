@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick.Layouts
 import Caelestia.Config
 import Caelestia.I18n
+import qs.services
 import qs.modules.nexus.common
 
 PageBase {
@@ -45,11 +46,19 @@ PageBase {
 
         ToggleRow {
             first: true
-            last: true
             text: Tr.trCtx("Enabled", "toggle label")
             subtext: Tr.tr("Show the utilities panel")
             checked: Config.utilities.enabled
             onToggled: GlobalConfig.utilities.enabled = checked
+        }
+
+        ToggleRow {
+            last: true
+            text: Tr.tr("Show taskbar icon")
+            subtext: Tr.tr("Display quick controls icon in the taskbar status section")
+            disabled: !Config.utilities.enabled
+            checked: BarEntries.isStatusIconEnabled("kbLayout")
+            onToggled: BarEntries.setStatusIconEnabled("kbLayout", checked)
         }
 
         // Cards
@@ -132,6 +141,14 @@ PageBase {
             disabled: !Config.utilities.cards.quickToggles
             checked: root.isToggleOn("dnd")
             onToggled: root.setToggleOn("dnd", checked)
+        }
+
+        ToggleRow {
+            text: Tr.tr("Night light")
+            subtext: Tr.tr("Toggle screen color temperature")
+            disabled: !Config.utilities.cards.quickToggles
+            checked: root.isToggleOn("nightLight")
+            onToggled: root.setToggleOn("nightLight", checked)
         }
 
         ToggleRow {

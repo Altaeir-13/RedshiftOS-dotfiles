@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Layouts
 import Caelestia.Config
 import Caelestia.I18n
+import qs.services
 import qs.modules.nexus.common
 
 PageBase {
@@ -29,6 +30,14 @@ PageBase {
             text: Tr.trCtx("Enabled", "toggle label")
             checked: Config.launcher.enabled
             onToggled: GlobalConfig.launcher.enabled = checked
+        }
+
+        ToggleRow {
+            text: Tr.tr("Show taskbar icon")
+            subtext: Tr.tr("Display emblem icon on the taskbar to open the launcher")
+            disabled: !Config.launcher.enabled
+            checked: BarEntries.isEntryEnabled("logo")
+            onToggled: BarEntries.setEntryEnabled("logo", checked)
         }
 
         ToggleRow {

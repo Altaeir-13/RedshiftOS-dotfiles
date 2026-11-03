@@ -98,6 +98,7 @@ Item {
                 implicitHeight: parent.implicitHeight
 
                 value: Audio.volume
+                to: GlobalConfig.services.maxVolume
                 onInteraction: value => Audio.setVolume(value)
             }
         }

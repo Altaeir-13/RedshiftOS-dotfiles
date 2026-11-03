@@ -40,11 +40,14 @@ StyledRect {
                 return true;
             });
 
-        // Toggle adicional do híbrido.
-        items.push({
-            id: "nightLight",
-            enabled: true
-        });
+        // Toggle adicional do híbrido: ativo por padrão se não configurado explicitamente.
+        const configuredNightLight = Config.utilities.quickToggles.values.find(t => t.id === "nightLight");
+        if (configuredNightLight === undefined && !seenIds.has("nightLight")) {
+            items.push({
+                id: "nightLight",
+                enabled: true
+            });
+        }
 
         return items;
     }
@@ -112,7 +115,7 @@ StyledRect {
                 DelegateChoice {
                     roleValue: "wifi"
                     delegate: Toggle {
-                        icon: "wifi"
+                        icon: Nmcli.wifiEnabled ? "wifi" : "wifi_off"
                         checked: Nmcli.wifiEnabled
                         onClicked: Nmcli.toggleWifi()
                     }
@@ -120,7 +123,7 @@ StyledRect {
                 DelegateChoice {
                     roleValue: "bluetooth"
                     delegate: Toggle {
-                        icon: "bluetooth"
+                        icon: (Bluetooth.defaultAdapter?.enabled ?? false) ? "bluetooth" : "bluetooth_disabled"
                         checked: Bluetooth.defaultAdapter?.enabled ?? false // qmllint disable unresolved-type
                         onClicked: {
                             const adapter = Bluetooth.defaultAdapter; // qmllint disable unresolved-type
@@ -132,7 +135,7 @@ StyledRect {
                 DelegateChoice {
                     roleValue: "mic"
                     delegate: Toggle {
-                        icon: "mic"
+                        icon: Audio.sourceMuted ? "mic_off" : "mic"
                         checked: !Audio.sourceMuted
                         onClicked: {
                             const audio = Audio.source?.audio;
@@ -156,7 +159,7 @@ StyledRect {
                 DelegateChoice {
                     roleValue: "gameMode"
                     delegate: Toggle {
-                        icon: "gamepad"
+                        icon: "sports_esports"
                         checked: GameMode.enabled
                         onClicked: GameMode.enabled = !GameMode.enabled
                     }
@@ -164,7 +167,7 @@ StyledRect {
                 DelegateChoice {
                     roleValue: "dnd"
                     delegate: Toggle {
-                        icon: "notifications_off"
+                        icon: Notifs.dnd ? "notifications_off" : "notifications"
                         checked: Notifs.dnd
                         onClicked: Notifs.dnd = !Notifs.dnd
                     }
@@ -174,7 +177,7 @@ StyledRect {
                     roleValue: "nightLight"
 
                     delegate: Toggle {
-                        icon: "nightlight"
+                        icon: root.nightLightEnabled ? "nightlight" : "light_mode"
 
                         checked:
                             root.nightLightEnabled
@@ -207,7 +210,9 @@ StyledRect {
                 DelegateChoice {
                     roleValue: "vpn"
                     delegate: Toggle {
-                        icon: "vpn_key"
+                        icon: VPN.status.state === "needs-auth"
+                            ? "vpn_lock"
+                            : (VPN.connected ? "vpn_key" : "vpn_key_off")
                         checked: VPN.connected && VPN.status.state !== "needs-auth" && VPN.status.state !== "error"
                         enabled: !VPN.connecting && !VPN.disconnecting
                         isToggle: VPN.status.state !== "needs-auth" && VPN.status.state !== "error"

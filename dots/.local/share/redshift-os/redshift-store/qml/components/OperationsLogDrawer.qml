@@ -585,10 +585,9 @@ Rectangle {
                                 clip: true
 
                                 onAccepted: {
-                                    if (text.trim().length > 0) {
-                                        root.customInputSubmitted(text.trim());
-                                        text = "";
-                                    }
+                                    // Enter vazio é uma resposta válida (aceita o padrão do menu do yay/pacman)
+                                    root.customInputSubmitted(text.trim());
+                                    text = "";
                                 }
                             }
                         }
@@ -615,10 +614,8 @@ Rectangle {
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
-                                    if (customPromptInput.text.trim().length > 0) {
-                                        root.customInputSubmitted(customPromptInput.text.trim());
-                                        customPromptInput.text = "";
-                                    }
+                                    root.customInputSubmitted(customPromptInput.text.trim());
+                                    customPromptInput.text = "";
                                 }
                             }
                         }

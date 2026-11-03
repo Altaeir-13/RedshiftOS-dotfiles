@@ -16,6 +16,10 @@
             },
             {
                 "enabled": true,
+                "id": "dashboard"
+            },
+            {
+                "enabled": true,
                 "id": "workspaces"
             },
             {
@@ -44,7 +48,15 @@
             },
             {
                 "enabled": true,
+                "id": "sidebar"
+            },
+            {
+                "enabled": true,
                 "id": "power"
+            },
+            {
+                "enabled": true,
+                "id": "uiSwitch"
             }
         ],
         "persistent": true,

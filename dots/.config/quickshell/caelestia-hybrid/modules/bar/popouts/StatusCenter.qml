@@ -5,12 +5,14 @@ import QtQuick.Layouts
 
 import Quickshell
 import Quickshell.Io
+import Quickshell.Bluetooth
 
 import Caelestia
 import Caelestia.Config
 
 import qs.components
 import qs.services
+import qs.utils
 import qs.modules.nexus
 import qs.modules.utilities.cards as UtilityCards
 
@@ -26,6 +28,15 @@ Item {
 
     property bool nightLightEnabled: false
     property bool keepAwakeEnabled: false
+
+    function isToggleEnabled(id: string): bool {
+        const item = Config.utilities.quickToggles.values.find(t => t.id === id);
+        if (item !== undefined)
+            return item.enabled;
+        if (id === "vpn")
+            return false;
+        return true;
+    }
 
     readonly property PersistentProperties recorderProps:
         PersistentProperties {
@@ -387,6 +398,7 @@ Item {
             // ------------------------------------------------
 
             StyledText {
+                visible: Config.utilities.cards.quickToggles || Config.utilities.cards.keepAwake
                 text:
                     qsTr("System")
 
@@ -400,6 +412,7 @@ Item {
 
             GridLayout {
                 Layout.fillWidth: true
+                visible: Config.utilities.cards.quickToggles || Config.utilities.cards.keepAwake
 
                 columns: 3
 
@@ -409,9 +422,47 @@ Item {
                 rowSpacing:
                     Tokens.spacing.small
 
+                QuickControl {
+                    visible: Config.utilities.cards.quickToggles && root.isToggleEnabled("wifi")
+
+                    icon:
+                        Nmcli.wifiEnabled
+                            ? "wifi"
+                            : "wifi_off"
+
+                    label:
+                        qsTr("Wi-Fi")
+
+                    active:
+                        Nmcli.wifiEnabled
+
+                    onActivated:
+                        Nmcli.toggleWifi()
+                }
 
                 QuickControl {
-                    Layout.fillWidth: true
+                    visible: Config.utilities.cards.quickToggles && root.isToggleEnabled("bluetooth")
+
+                    icon:
+                        (Bluetooth.defaultAdapter?.enabled ?? false)
+                            ? "bluetooth"
+                            : "bluetooth_disabled"
+
+                    label:
+                        qsTr("Bluetooth")
+
+                    active:
+                        Bluetooth.defaultAdapter?.enabled ?? false
+
+                    onActivated: {
+                        const adapter = Bluetooth.defaultAdapter;
+                        if (adapter)
+                            adapter.enabled = !adapter.enabled;
+                    }
+                }
+
+                QuickControl {
+                    visible: Config.utilities.cards.quickToggles && root.isToggleEnabled("mic")
 
                     icon:
                         Audio.sourceMuted
@@ -434,9 +485,8 @@ Item {
                     }
                 }
 
-
                 QuickControl {
-                    Layout.fillWidth: true
+                    visible: Config.utilities.cards.quickToggles && root.isToggleEnabled("nightLight")
 
                     icon:
                         root.nightLightEnabled
@@ -453,9 +503,8 @@ Item {
                         root.toggleNightLight()
                 }
 
-
                 QuickControl {
-                    Layout.fillWidth: true
+                    visible: Config.utilities.cards.quickToggles && root.isToggleEnabled("gameMode")
 
                     icon:
                         "sports_esports"
@@ -474,9 +523,8 @@ Item {
                             !GameMode.enabled
                 }
 
-
                 QuickControl {
-                    Layout.fillWidth: true
+                    visible: Config.utilities.cards.quickToggles && root.isToggleEnabled("dnd")
 
                     icon:
                         Notifs.dnd
@@ -494,9 +542,8 @@ Item {
                             !Notifs.dnd
                 }
 
-
                 QuickControl {
-                    Layout.fillWidth: true
+                    visible: Config.utilities.cards.keepAwake
 
                     icon:
                         root.keepAwakeEnabled
@@ -513,9 +560,28 @@ Item {
                         root.toggleAwake()
                 }
 
+                QuickControl {
+                    visible: Config.utilities.cards.quickToggles && root.isToggleEnabled("vpn")
+
+                    icon:
+                        VPN.status.state === "needs-auth"
+                            ? "vpn_lock"
+                            : (VPN.connected
+                                ? "vpn_key"
+                                : "vpn_key_off")
+
+                    label:
+                        qsTr("VPN")
+
+                    active:
+                        VPN.connected
+
+                    onActivated:
+                        VPN.toggle()
+                }
 
                 QuickControl {
-                    Layout.fillWidth: true
+                    visible: Config.utilities.cards.quickToggles && root.isToggleEnabled("settings")
 
                     icon:
                         "settings"
@@ -541,10 +607,12 @@ Item {
             StyledRect {
                 id: recorderRow
 
-                Layout.fillWidth: true
-                Layout.bottomMargin: Tokens.spacing.small
+                visible: Config.utilities.cards.recorder
 
-                implicitHeight: 58
+                Layout.fillWidth: visible
+                Layout.bottomMargin: visible ? Tokens.spacing.small : 0
+
+                implicitHeight: visible ? 58 : 0
 
                 
                 clip: true
@@ -797,7 +865,8 @@ radius:
 
         signal activated()
 
-        implicitHeight: 62
+        implicitHeight: visible ? 62 : 0
+        Layout.fillWidth: visible
 
         radius:
             Tokens.rounding.large

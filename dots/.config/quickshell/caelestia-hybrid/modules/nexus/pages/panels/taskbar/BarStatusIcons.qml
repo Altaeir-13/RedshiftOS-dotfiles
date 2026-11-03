@@ -10,7 +10,7 @@ PageBase {
 
     readonly property var builtinIcons: ({
             lockStatus: Tr.tr("Lock keys"),
-            kbLayout: Tr.tr("Keyboard layout"),
+            kbLayout: Tr.tr("Quick controls"),
             audio: Tr.tr("Speakers"),
             microphone: Tr.tr("Microphone"),
             network: Tr.tr("Network"),

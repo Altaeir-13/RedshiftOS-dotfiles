@@ -6,7 +6,7 @@ import Quickshell.Io
 
 QuickToggleButton {
     id: root
-    buttonIcon: "gamepad"
+    buttonIcon: "sports_esports"
     toggled: toggled
 
     onClicked: {

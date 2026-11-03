@@ -7,7 +7,7 @@ QuickToggleModel {
     id: root
     name: Translation.tr("Game mode")
     toggled: !confOpt.value
-    icon: "gamepad"
+    icon: "sports_esports"
 
     mainAction: () => {
         root.toggled = !root.toggled;

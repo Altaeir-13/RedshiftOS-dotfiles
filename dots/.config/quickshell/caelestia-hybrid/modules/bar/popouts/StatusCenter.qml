@@ -564,9 +564,11 @@ Item {
                     visible: Config.utilities.cards.quickToggles && root.isToggleEnabled("vpn")
 
                     icon:
-                        VPN.connected
+                        VPN.status.state === "needs-auth"
                             ? "vpn_lock"
-                            : "vpn_key"
+                            : (VPN.connected
+                                ? "vpn_key"
+                                : "vpn_key_off")
 
                     label:
                         qsTr("VPN")

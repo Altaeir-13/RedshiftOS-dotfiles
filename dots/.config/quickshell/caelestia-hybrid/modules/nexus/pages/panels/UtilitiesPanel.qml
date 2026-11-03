@@ -144,6 +144,14 @@ PageBase {
         }
 
         ToggleRow {
+            text: Tr.tr("Night light")
+            subtext: Tr.tr("Toggle screen color temperature")
+            disabled: !Config.utilities.cards.quickToggles
+            checked: root.isToggleOn("nightLight")
+            onToggled: root.setToggleOn("nightLight", checked)
+        }
+
+        ToggleRow {
             last: true
             text: Tr.tr("VPN")
             subtext: Tr.tr("Connect or disconnect the VPN")

@@ -1,0 +1,24 @@
+[Desktop Entry]
+Type=Application
+Name=Reiniciar Interface do Redshift OS
+Name[en_US]=Redshift UI Recovery
+GenericName=Redshift UI Recovery
+GenericName[pt_BR]=Reiniciar Interface do Redshift OS
+Comment=Restaurar barra de tarefas, wallpaper e componentes gráficos sem reiniciar o computador.
+Comment[en_US]=Restore taskbar, wallpaper, and graphical components without restarting the computer.
+Exec=redshift-ui-recover --soft
+Icon=redshift-symbolic
+Terminal=false
+Categories=System;Utility;Core;
+Keywords=recover;recuperar;reiniciar;interface;quickshell;bar;barra;wallpaper;painel;
+Actions=Restart;Hard;
+
+[Desktop Action Restart]
+Name=Reiniciar Interface (Frontend Ativo)
+Name[en_US]=Restart Active Frontend
+Exec=redshift-ui-recover --restart
+
+[Desktop Action Hard]
+Name=Recuperação Completa (Hard Recovery)
+Name[en_US]=Full Recovery
+Exec=redshift-ui-recover --hard

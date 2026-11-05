@@ -1,0 +1,13 @@
+[Unit]
+Description=Redshift OS UI Recovery Watchdog
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/redshift-ui-recover --watchdog
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=graphical-session.target

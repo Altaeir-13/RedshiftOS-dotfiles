@@ -76,7 +76,7 @@ Uso: redshift-doctor [OPÇÕES] [COMANDO] [ALVO]
 
 Comandos CLI:
   --check [ALVO]       Executa verificações de integridade (padrão: all).
-                       Alvos suportados: all, caelestia, quickshell, packages, hyprland, store
+                       Alvos suportados: all, ui, caelestia, quickshell, packages, hyprland, store
   --report             Gera relatório detalhado do ambiente e componentes.
   --repair caelestia   Executa reparo controlado do plugin/módulo Caelestia.
                        Exige confirmação interativa ou flag -y/--yes.
@@ -563,6 +563,169 @@ check_store_and_sync() {
     fi
 }
 
+# UI Recovery Diagnostics & Health Check
+check_ui_recovery() {
+    # 1. Verifica presença e executabilidade de redshift-ui-recover
+    local recover_bin=""
+    local -a bin_candidates=(
+        "$XDG_BIN_HOME/redshift-ui-recover"
+        "$HOME/.local/bin/redshift-ui-recover"
+        "/usr/local/bin/redshift-ui-recover"
+        "/usr/bin/redshift-ui-recover"
+        "dots/.local/bin/redshift-ui-recover"
+    )
+    for b in "${bin_candidates[@]}"; do
+        if [[ -x "$b" ]]; then
+            recover_bin="$b"
+            break
+        fi
+    done
+
+    if [[ -n "$recover_bin" ]]; then
+        record OK "ui" "Utilitário UI Recovery" "redshift-ui-recover localizado e executável ($recover_bin)"
+    else
+        record ERROR "ui" "Utilitário UI Recovery" "redshift-ui-recover não encontrado ou sem permissão de execução"
+    fi
+
+    # 2. Verifica status de execução do Quickshell e IPC do frontend ativo
+    local active_fe="end4"
+    local state_file="${XDG_STATE_HOME}/quickshell/ui-switch/current"
+    if [[ -f "$state_file" ]]; then
+        local fe_read
+        fe_read="$(head -n 1 "$state_file" 2>/dev/null | tr -d '[:space:]' || true)"
+        if [[ -n "$fe_read" ]]; then
+            active_fe="$fe_read"
+        fi
+    fi
+
+    local qs_pids
+    qs_pids="$(pgrep -x qs 2>/dev/null || pgrep -f "quickshell/ii/shell.qml|quickshell/caelestia-hybrid/shell.qml" 2>/dev/null || true)"
+    qs_pids="$(echo "$qs_pids" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+
+    local running_end4=false
+    local running_cael=false
+    if command -v qs >/dev/null 2>&1; then
+        if qs list --all 2>/dev/null | grep -Fq "/quickshell/ii/shell.qml"; then
+            running_end4=true
+        fi
+        if qs list --all 2>/dev/null | grep -Fq "/quickshell/caelestia-hybrid/shell.qml"; then
+            running_cael=true
+        fi
+    fi
+
+    if [[ -n "$qs_pids" ]] || [[ "$running_end4" == "true" ]] || [[ "$running_cael" == "true" ]]; then
+        local fe_running="indefinido"
+        if [[ "$running_end4" == "true" && "$running_cael" == "false" ]]; then
+            fe_running="end4"
+        elif [[ "$running_end4" == "false" && "$running_cael" == "true" ]]; then
+            fe_running="caelestia"
+        elif [[ "$running_end4" == "true" && "$running_cael" == "true" ]]; then
+            fe_running="conflito"
+        fi
+
+        local pid_info="${qs_pids:+ (PID(s): $qs_pids)}"
+        if [[ "$fe_running" == "$active_fe" ]]; then
+            record OK "ui" "Status do Quickshell" "Frontend ativo '$active_fe' em execução$pid_info"
+        elif [[ "$fe_running" == "conflito" ]]; then
+            record WARN "ui" "Status do Quickshell" "Conflito: Ambos os frontends end4 e Caelestia em execução simultânea$pid_info"
+        else
+            record WARN "ui" "Status do Quickshell" "Dessincronizado: Configurado para '$active_fe', mas rodando '$fe_running'$pid_info"
+        fi
+    else
+        record ERROR "ui" "Status do Quickshell" "Nenhum processo Quickshell ativo detectado"
+    fi
+
+    # Teste de IPC com timeout de 1s
+    if command -v qs >/dev/null 2>&1; then
+        local t_start t_end elapsed_ms
+        t_start="$(date +%s%N 2>/dev/null || echo 0)"
+        if timeout 1 qs list --all >/dev/null 2>&1; then
+            t_end="$(date +%s%N 2>/dev/null || echo 0)"
+            if (( t_start > 0 && t_end >= t_start )); then
+                elapsed_ms=$(( (t_end - t_start) / 1000000 ))
+            else
+                elapsed_ms=1
+            fi
+            record OK "ui" "IPC do Quickshell" "IPC respondendo com sucesso (${elapsed_ms}ms)"
+        else
+            record ERROR "ui" "IPC do Quickshell" "Timeout (> 1s) ou falha de comunicação com o socket IPC do Quickshell"
+        fi
+    else
+        record ERROR "ui" "IPC do Quickshell" "Binário 'qs' (Quickshell) não encontrado no PATH"
+    fi
+
+    # 3. Verifica disponibilidade do wallpaper
+    local ii_conf="${XDG_CONFIG_HOME}/illogical-impulse/config.json"
+    local wall_path=""
+    if [[ -f "$ii_conf" ]] && command -v jq >/dev/null 2>&1; then
+        wall_path="$(jq -r '.background.wallpaperPath // empty' "$ii_conf" 2>/dev/null || true)"
+        wall_path="${wall_path#file://}"
+    fi
+
+    if [[ -n "$wall_path" && -r "$wall_path" ]]; then
+        case "${wall_path,,}" in
+            *.mp4|*.webm|*.mkv|*.mov|*.m4v|*.avi|*.gif)
+                local vid_bridge_pid_file="${XDG_STATE_HOME}/quickshell/ui-switch/video-bridge.pid"
+                if [[ "$active_fe" == "caelestia" ]]; then
+                    if [[ -f "$vid_bridge_pid_file" ]] && kill -0 "$(cat "$vid_bridge_pid_file" 2>/dev/null)" 2>/dev/null; then
+                        record OK "ui" "Disponibilidade do Wallpaper" "Vídeo wallpaper ativo com video-bridge ($wall_path)"
+                    else
+                        record WARN "ui" "Disponibilidade do Wallpaper" "Vídeo wallpaper configurado ($wall_path), mas video-bridge está inativo"
+                    fi
+                else
+                    if pgrep -x mpvpaper >/dev/null 2>&1; then
+                        record OK "ui" "Disponibilidade do Wallpaper" "Vídeo wallpaper ativo com mpvpaper ($wall_path)"
+                    else
+                        record WARN "ui" "Disponibilidade do Wallpaper" "Vídeo wallpaper configurado ($wall_path), mas mpvpaper inativo"
+                    fi
+                fi
+                ;;
+            *)
+                record OK "ui" "Disponibilidade do Wallpaper" "Wallpaper estático acessível ($wall_path)"
+                ;;
+        esac
+    elif [[ -n "$wall_path" ]]; then
+        record WARN "ui" "Disponibilidade do Wallpaper" "Arquivo de wallpaper configurado não encontrado: $wall_path"
+    else
+        record WARN "ui" "Disponibilidade do Wallpaper" "Nenhum caminho de wallpaper configurado em $ii_conf"
+    fi
+
+    # 4. Verifica histórico de crashes em ui-recovery-state.json
+    local recovery_state="${XDG_STATE_HOME}/redshift-os/ui-recovery-state.json"
+    if [[ -f "$recovery_state" ]] && command -v jq >/dev/null 2>&1; then
+        local backoff
+        backoff="$(jq -r '.backoff_active // false' "$recovery_state" 2>/dev/null || echo false)"
+        local backoff_reason
+        backoff_reason="$(jq -r '.backoff_reason // empty' "$recovery_state" 2>/dev/null || true)"
+
+        if [[ "$backoff" == "true" ]]; then
+            record ERROR "ui" "Histórico de Recuperação da UI" "Backoff de segurança ativo: $backoff_reason"
+        else
+            local recent_crashes=0
+            if command -v python3 >/dev/null 2>&1; then
+                recent_crashes="$(python3 -c '
+import sys, json, time
+try:
+    with open(sys.argv[1]) as f:
+        data = json.load(f)
+    now = int(time.time())
+    print(sum(1 for c in data.get("recent_crashes", []) if now - c.get("timestamp", 0) <= 300))
+except Exception:
+    print(0)
+' "$recovery_state" 2>/dev/null || echo 0)"
+            fi
+
+            if (( recent_crashes == 0 )); then
+                record OK "ui" "Histórico de Recuperação da UI" "Nenhum crash recente registrado nos últimos 5 minutos"
+            else
+                record WARN "ui" "Histórico de Recuperação da UI" "$recent_crashes falha(s) de UI registrada(s) nos últimos 5 minutos"
+            fi
+        fi
+    else
+        record OK "ui" "Histórico de Recuperação da UI" "Nenhum histórico prévio de falhas registrado"
+    fi
+}
+
 # Repair action for Caelestia
 repair_caelestia() {
     printf "%b\n" "${CLR_BOLD}=== Ação de Recuperação: Reparo do Caelestia ===${CLR_RESET}"
@@ -739,7 +902,7 @@ while [[ $# -gt 0 ]]; do
             show_help
             exit 0
             ;;
-        caelestia|quickshell|packages|hyprland|store|all)
+        caelestia|quickshell|packages|hyprland|store|ui|all)
             TARGET="$1"
             shift
             ;;
@@ -790,6 +953,9 @@ case "$TARGET" in
     store)
         check_store_and_sync
         ;;
+    ui)
+        check_ui_recovery
+        ;;
     all|*)
         check_update_markers
         check_end4
@@ -802,6 +968,7 @@ case "$TARGET" in
         check_hyprland
         check_store_and_sync
         check_switch_readiness
+        check_ui_recovery
         ;;
 esac
 

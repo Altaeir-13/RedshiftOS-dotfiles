@@ -68,6 +68,20 @@ acquire_switch_lock() {
 }
 
 
+reset_recovery_backoff() {
+    local recovery_state="${XDG_STATE_HOME:-$HOME/.local/state}/redshift-os/ui-recovery-state.json"
+    if [[ -f "$recovery_state" ]] && command -v jq >/dev/null 2>&1; then
+        local tmp
+        tmp="$(mktemp "${recovery_state}.tmp.XXXXXX")"
+        if jq '.backoff_active = false | .backoff_reason = null' "$recovery_state" > "$tmp" 2>/dev/null; then
+            mv -f "$tmp" "$recovery_state"
+        else
+            rm -f "$tmp"
+        fi
+    fi
+}
+
+
 stop_video_bridge() {
     if [[ -f "$VIDEO_PID_FILE" ]]; then
         local vpid
@@ -357,6 +371,7 @@ to_caelestia() {
         return 1
     fi
 
+    reset_recovery_backoff
     echo "Caelestia ativo."
 }
 
@@ -383,6 +398,7 @@ to_end4() {
         return 1
     fi
 
+    reset_recovery_backoff
     echo "end-4 ativo."
 }
 

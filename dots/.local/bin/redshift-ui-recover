@@ -1,0 +1,1090 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Redshift UI Recovery - Diagnostics, Health Check and Watchdog for Redshift OS
+# =============================================================================
+# Utilitário independente de recuperação e supervisão das interfaces Quickshell
+# (end4 e caelestia-hybrid) no ambiente Hyprland do Redshift OS.
+# =============================================================================
+
+set -uo pipefail
+
+# -----------------------------------------------------------------------------
+# Variáveis de Ambiente e Caminhos XDG
+# -----------------------------------------------------------------------------
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+# Diretórios de Estado e Logs
+RECOVERY_DIR="$XDG_STATE_HOME/redshift-os"
+RECOVERY_LOG="$RECOVERY_DIR/ui-recovery.log"
+RECOVERY_STATE_FILE="$RECOVERY_DIR/ui-recovery-state.json"
+
+STATE_DIR="$XDG_STATE_HOME/quickshell/ui-switch"
+CURRENT_FRONTEND_FILE="$STATE_DIR/current"
+LOCK_FILE="$STATE_DIR/switch.lock"
+VIDEO_PID_FILE="$STATE_DIR/video-bridge.pid"
+
+# Configurações dos Frontends
+II_CONFIG="$XDG_CONFIG_HOME/illogical-impulse/config.json"
+CAEL_CONFIG="$XDG_CONFIG_HOME/quickshell/caelestia-hybrid"
+UI_SWITCH_SCRIPT="$XDG_CONFIG_HOME/quickshell/ui-switch.sh"
+WALLPAPER_RECOVER_SCRIPT="${WALLPAPER_RECOVER_SCRIPT:-$XDG_DATA_HOME/redshift-os/recovery/recover-wallpaper.sh}"
+if [[ ! -x "$WALLPAPER_RECOVER_SCRIPT" ]]; then
+    for _w_cand in \
+        "$XDG_DATA_HOME/redshift-os/recovery/recover-wallpaper.sh" \
+        "$HOME/.local/share/redshift-os/recovery/recover-wallpaper.sh" \
+        "$(dirname "$(dirname "$(realpath "${BASH_SOURCE[0]}")")")/share/redshift-os/recovery/recover-wallpaper.sh" \
+        "/usr/share/redshift-os/recovery/recover-wallpaper.sh"; do
+        if [[ -x "$_w_cand" ]]; then
+            WALLPAPER_RECOVER_SCRIPT="$_w_cand"
+            break
+        fi
+    done
+    unset _w_cand
+fi
+
+END4_LOG="${END4_LOG:-/tmp/quickshell-ii.log}"
+CAEL_LOG="${CAEL_LOG:-/tmp/caelestia-hybrid.log}"
+
+# Delays parametrizáveis para execução determinística e ágil em testes
+RECOVERY_GRACE_SLEEP="${RECOVERY_GRACE_SLEEP:-1}"
+RECOVERY_CLEANUP_SLEEP="${RECOVERY_CLEANUP_SLEEP:-0.5}"
+RECOVERY_POLL_SLEEP="${RECOVERY_POLL_SLEEP:-0.2}"
+
+# Cores ANSI para saída no terminal interativo
+if [[ -t 1 ]] && [[ "${NO_COLOR:-0}" != "1" ]]; then
+    C_OK="\033[1;32m"
+    C_WARN="\033[1;33m"
+    C_ERR="\033[1;31m"
+    C_BOLD="\033[1m"
+    C_CYAN="\033[1;36m"
+    C_DIM="\033[2m"
+    C_RESET="\033[0m"
+else
+    C_OK=""
+    C_WARN=""
+    C_ERR=""
+    C_BOLD=""
+    C_CYAN=""
+    C_DIM=""
+    C_RESET=""
+fi
+
+# -----------------------------------------------------------------------------
+# Verificações de Segurança Fundamentais
+# -----------------------------------------------------------------------------
+if [[ "$(id -u)" -eq 0 ]]; then
+    echo "ERRO DE SEGURANÇA: redshift-ui-recover nunca deve ser executado como root." >&2
+    exit 1
+fi
+
+mkdir -p "$RECOVERY_DIR" "$STATE_DIR"
+
+# -----------------------------------------------------------------------------
+# Logging Estruturado
+# -----------------------------------------------------------------------------
+log() {
+    local level="${1:-INFO}"
+    local msg="$2"
+    local timestamp
+    timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+    printf '[%s] [%-8s] %s\n' "$timestamp" "$level" "$msg" >> "$RECOVERY_LOG" 2>/dev/null || true
+    if [[ "${VERBOSE:-0}" == "1" ]]; then
+        printf '%b[%s]%b %s\n' "$C_CYAN" "$level" "$C_RESET" "$msg" >&2
+    fi
+}
+
+notify_user() {
+    local urgency="${1:-normal}"
+    local title="$2"
+    local body="$3"
+
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -u "$urgency" -a "Redshift UI Recovery" "$title" "$body" >/dev/null 2>&1 || true
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Gerenciamento de Estado JSON (Crashes, Histórico e Backoff)
+# -----------------------------------------------------------------------------
+ensure_state_file() {
+    if [[ ! -f "$RECOVERY_STATE_FILE" ]] || ! jq empty "$RECOVERY_STATE_FILE" 2>/dev/null; then
+        cat << 'EOF' > "$RECOVERY_STATE_FILE"
+{
+  "updated_at": "1970-01-01T00:00:00Z",
+  "recent_crashes": [],
+  "recent_recoveries": [],
+  "crashes_by_frontend": {
+    "end4": 0,
+    "caelestia": 0
+  },
+  "backoff_active": false,
+  "backoff_reason": null
+}
+EOF
+    fi
+}
+
+record_crash() {
+    local frontend="$1"
+    local reason="$2"
+    ensure_state_file
+
+    python3 -c '
+import sys, json, time
+
+state_file = sys.argv[1]
+frontend = sys.argv[2]
+reason = sys.argv[3]
+now = int(time.time())
+
+try:
+    with open(state_file, "r") as f:
+        data = json.load(f)
+except Exception:
+    data = {}
+
+recent = data.get("recent_crashes", [])
+# Limpar crashes com mais de 1 hora
+recent = [c for c in recent if now - c.get("timestamp", 0) <= 3600]
+recent.append({"timestamp": now, "frontend": frontend, "reason": reason})
+
+by_fe = data.get("crashes_by_frontend", {})
+by_fe[frontend] = by_fe.get(frontend, 0) + 1
+
+data["recent_crashes"] = recent
+data["crashes_by_frontend"] = by_fe
+data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+
+tmp_file = state_file + ".tmp"
+with open(tmp_file, "w") as f:
+    json.dump(data, f, indent=2)
+import os
+os.replace(tmp_file, state_file)
+' "$RECOVERY_STATE_FILE" "$frontend" "$reason" 2>/dev/null || true
+
+    log "CRASH" "Falha registrada para o frontend '$frontend' (Motivo: $reason)."
+}
+
+count_crashes_in_window() {
+    local frontend="$1"
+    local window_seconds="$2"
+    ensure_state_file
+
+    python3 -c '
+import sys, json, time
+state_file = sys.argv[1]
+frontend = sys.argv[2]
+window = int(sys.argv[3])
+now = int(time.time())
+
+try:
+    with open(state_file, "r") as f:
+        data = json.load(f)
+    crashes = data.get("recent_crashes", [])
+    count = sum(1 for c in crashes if c.get("frontend") == frontend and (now - c.get("timestamp", 0)) <= window)
+    print(count)
+except Exception:
+    print(0)
+' "$RECOVERY_STATE_FILE" "$frontend" "$window_seconds" 2>/dev/null || echo 0
+}
+
+record_recovery_event() {
+    ensure_state_file
+
+    python3 -c '
+import sys, json, time
+state_file = sys.argv[1]
+now = int(time.time())
+
+try:
+    with open(state_file, "r") as f:
+        data = json.load(f)
+except Exception:
+    data = {}
+
+recoveries = data.get("recent_recoveries", [])
+recoveries = [r for r in recoveries if now - r <= 3600]
+recoveries.append(now)
+data["recent_recoveries"] = recoveries
+data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+
+tmp_file = state_file + ".tmp"
+with open(tmp_file, "w") as f:
+    json.dump(data, f, indent=2)
+import os
+os.replace(tmp_file, state_file)
+' "$RECOVERY_STATE_FILE" 2>/dev/null || true
+}
+
+count_recoveries_in_window() {
+    local window_seconds="$1"
+    ensure_state_file
+
+    python3 -c '
+import sys, json, time
+state_file = sys.argv[1]
+window = int(sys.argv[2])
+now = int(time.time())
+
+try:
+    with open(state_file, "r") as f:
+        data = json.load(f)
+    rec = data.get("recent_recoveries", [])
+    count = sum(1 for r in rec if (now - r) <= window)
+    print(count)
+except Exception:
+    print(0)
+' "$RECOVERY_STATE_FILE" "$window_seconds" 2>/dev/null || echo 0
+}
+
+set_backoff_state() {
+    local active="$1" # true or false
+    local reason="${2:-}"
+    ensure_state_file
+
+    python3 -c '
+import sys, json, time
+state_file = sys.argv[1]
+active = (sys.argv[2].lower() == "true")
+reason = sys.argv[3] if len(sys.argv) > 3 else None
+
+try:
+    with open(state_file, "r") as f:
+        data = json.load(f)
+except Exception:
+    data = {}
+
+data["backoff_active"] = active
+data["backoff_reason"] = reason if active else None
+data["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+tmp_file = state_file + ".tmp"
+with open(tmp_file, "w") as f:
+    json.dump(data, f, indent=2)
+import os
+os.replace(tmp_file, state_file)
+' "$RECOVERY_STATE_FILE" "$active" "$reason" 2>/dev/null || true
+}
+
+is_backoff_active() {
+    ensure_state_file
+    jq -r '.backoff_active // false' "$RECOVERY_STATE_FILE" 2>/dev/null || echo false
+}
+
+# -----------------------------------------------------------------------------
+# Resolução e Detecção de Componentes
+# -----------------------------------------------------------------------------
+
+# Detectar e garantir HYPRLAND_INSTANCE_SIGNATURE
+resolve_hyprland_signature() {
+    if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+        printf '%s' "$HYPRLAND_INSTANCE_SIGNATURE"
+        return 0
+    fi
+    if [[ -d "$XDG_RUNTIME_DIR/hypr" ]]; then
+        local sig
+        sig="$(ls -t "$XDG_RUNTIME_DIR/hypr" 2>/dev/null | head -n 1 || true)"
+        if [[ -n "$sig" ]]; then
+            export HYPRLAND_INSTANCE_SIGNATURE="$sig"
+            printf '%s' "$sig"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+check_hyprland_status() {
+    local sig
+    if ! sig="$(resolve_hyprland_signature)"; then
+        return 1
+    fi
+
+    # Verificar se o socket existe ou hyprctl responde
+    local sock="$XDG_RUNTIME_DIR/hypr/$sig/.socket.sock"
+    if [[ -S "$sock" ]] || hyprctl version >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+# Frontend Ativo Configurado e Detectado
+get_configured_frontend() {
+    if [[ -f "$CURRENT_FRONTEND_FILE" ]]; then
+        local fe
+        fe="$(head -n 1 "$CURRENT_FRONTEND_FILE" 2>/dev/null | tr -d '[:space:]' || true)"
+        if [[ "$fe" == "caelestia" || "$fe" == "end4" ]]; then
+            printf '%s' "$fe"
+            return 0
+        fi
+    fi
+    # Default padrão se arquivo não existir
+    printf 'end4'
+}
+
+running_end4() {
+    qs list --all 2>/dev/null | grep -Fq "/quickshell/ii/shell.qml"
+}
+
+running_caelestia() {
+    qs list --all 2>/dev/null | grep -Fq "/quickshell/caelestia-hybrid/shell.qml"
+}
+
+get_running_frontend() {
+    local e=0 c=0
+    running_end4 && e=1
+    running_caelestia && c=1
+
+    if (( e == 1 && c == 0 )); then
+        echo "end4"
+    elif (( e == 0 && c == 1 )); then
+        echo "caelestia"
+    elif (( e == 1 && c == 1 )); then
+        echo "conflito"
+    else
+        echo "nenhum"
+    fi
+}
+
+get_quickshell_pids() {
+    local pids
+    pids="$(pgrep -x qs 2>/dev/null || true)"
+    if [[ -z "$pids" ]]; then
+        pids="$(pgrep -f "quickshell/ii/shell.qml|quickshell/caelestia-hybrid/shell.qml" 2>/dev/null || true)"
+    fi
+    echo "$pids" | tr '\n' ' ' | sed 's/[[:space:]]*$//'
+}
+
+test_quickshell_ipc() {
+    local start_ns end_ns elapsed_ms
+    start_ns="$(date +%s%N 2>/dev/null || echo 0)"
+
+    # Teste de timeout estrito de 1 segundo
+    if ! timeout 1 qs list --all >/dev/null 2>&1; then
+        return 1
+    fi
+
+    end_ns="$(date +%s%N 2>/dev/null || echo 0)"
+    if (( start_ns > 0 && end_ns >= start_ns )); then
+        elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+        printf '%d' "$elapsed_ms"
+    else
+        printf '1'
+    fi
+    return 0
+}
+
+is_screen_locked() {
+    if pidof hyprlock >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+is_switch_locked() {
+    [[ ! -f "$LOCK_FILE" ]] && return 1
+    if command -v flock >/dev/null 2>&1; then
+        # Tenta verificar se o FD pode ser adquirido de forma não bloqueante
+        exec 8<"$LOCK_FILE" 2>/dev/null || return 1
+        if ! flock -n 8 2>/dev/null; then
+            exec 8<&-
+            return 0 # Lock está ocupado
+        fi
+        flock -u 8 2>/dev/null || true
+        exec 8<&-
+    fi
+    return 1 # Lock está livre
+}
+
+check_wallpaper_status() {
+    local wall_path=""
+    if [[ -f "$II_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
+        wall_path="$(jq -r '.background.wallpaperPath // empty' "$II_CONFIG" 2>/dev/null || true)"
+        wall_path="${wall_path#file://}"
+    fi
+
+    if [[ -z "$wall_path" ]]; then
+        echo "MISSING: Caminho não configurado em $II_CONFIG"
+        return 1
+    fi
+
+    if [[ ! -r "$wall_path" ]]; then
+        echo "MISSING: Arquivo '$wall_path' não acessível"
+        return 1
+    fi
+
+    case "${wall_path,,}" in
+        *.mp4|*.webm|*.mkv|*.mov|*.m4v|*.avi|*.gif)
+            local current_fe
+            current_fe="$(get_configured_frontend)"
+            if [[ "$current_fe" == "caelestia" ]]; then
+                if [[ -f "$VIDEO_PID_FILE" ]]; then
+                    local vpid
+                    vpid="$(cat "$VIDEO_PID_FILE" 2>/dev/null | tr -d '[:space:]' || true)"
+                    if [[ -n "$vpid" ]] && kill -0 "$vpid" 2>/dev/null; then
+                        echo "OK_VIDEO: $wall_path (Video bridge PID $vpid)"
+                        return 0
+                    fi
+                fi
+                echo "WARN_VIDEO: $wall_path (Video bridge parado)"
+                return 2
+            else
+                if pgrep -x mpvpaper >/dev/null 2>&1; then
+                    echo "OK_VIDEO: $wall_path (mpvpaper ativo)"
+                    return 0
+                fi
+                echo "WARN_VIDEO: $wall_path (mpvpaper inativo)"
+                return 2
+            fi
+            ;;
+        *)
+            echo "OK_STATIC: $wall_path"
+            return 0
+            ;;
+    esac
+}
+
+check_watchdog_status() {
+    if systemctl --user is-active --quiet redshift-ui-watchdog.service 2>/dev/null; then
+        echo "systemd-active"
+        return 0
+    fi
+
+    local current_pid=$$
+    local other_pids
+    other_pids="$(pgrep -f "redshift-ui-recover --watchdog" 2>/dev/null | grep -v "^${current_pid}$" || true)"
+    if [[ -n "$other_pids" ]]; then
+        echo "daemon-active (PID $other_pids)"
+        return 0
+    fi
+
+    echo "inactive"
+    return 1
+}
+
+# Plugin resolver para Caelestia
+resolve_caelestia_plugin_dir() {
+    local candidate
+    local -a candidates=()
+
+    if [[ -n "${CAELESTIA_QML_PATH:-}" ]]; then
+        candidates+=("$CAELESTIA_QML_PATH")
+    fi
+
+    candidates+=(
+        "/usr/lib/qt6/qml"
+        "/usr/local/lib/qt6/qml"
+        "$XDG_DATA_HOME/quickshell/qml"
+        "$HOME/.local/lib/qt6/qml"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        if [[ -n "$candidate" && -d "$candidate/Caelestia" ]]; then
+            if [[ -f "$candidate/Caelestia/qmldir" && -r "$candidate/Caelestia/qmldir" ]]; then
+                printf '%s\n' "$candidate"
+                return 0
+            fi
+        fi
+    done
+
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# Ações de Recuperação
+# -----------------------------------------------------------------------------
+
+execute_wallpaper_recovery() {
+    log "RECOVERY" "Executando recuperação de wallpaper (Nível 2)..."
+    if [[ -x "$WALLPAPER_RECOVER_SCRIPT" ]]; then
+        if "$WALLPAPER_RECOVER_SCRIPT"; then
+            log "RECOVERY" "Wallpaper restabelecido via recover-wallpaper.sh."
+            return 0
+        fi
+    fi
+
+    # Fallback interno caso o script não exista
+    local default_wall="$XDG_CONFIG_HOME/quickshell/ii/assets/images/default_wallpaper.png"
+    if [[ -f "$default_wall" && -f "$II_CONFIG" ]]; then
+        log "RECOVERY" "Restaurando wallpaper padrão interno: $default_wall"
+        local tmp
+        tmp="$(mktemp "${II_CONFIG}.tmp.XXXXXX")"
+        if jq --arg p "$default_wall" '.background.wallpaperPath = $p' "$II_CONFIG" > "$tmp" 2>/dev/null; then
+            mv -f "$tmp" "$II_CONFIG"
+            return 0
+        fi
+        rm -f "$tmp"
+    fi
+
+    log "WARN" "Não foi possível restaurar wallpaper de forma independente."
+    return 1
+}
+
+restart_active_frontend() {
+    local frontend="$1"
+    log "RECOVERY" "Iniciando reinício controlado do frontend '$frontend' (Nível 3)..."
+
+    # 1. Adquirir lock compartilhado para evitar corridas com ui-switch.sh
+    exec 9>"$LOCK_FILE"
+    if ! flock -w 5 9; then
+        log "WARN" "Não foi possível adquirir lock ($LOCK_FILE). Outra transição está ativa."
+        exec 9>&-
+        return 2
+    fi
+
+    # 2. Encerrar graciosamente o frontend
+    if [[ "$frontend" == "caelestia" ]]; then
+        qs kill -c caelestia-hybrid >/dev/null 2>&1 || true
+    else
+        qs kill -c ii >/dev/null 2>&1 || true
+    fi
+
+    sleep "$RECOVERY_GRACE_SLEEP"
+
+    # 3. Limpeza seletiva segura se o processo estiver congelado
+    local pids
+    pids="$(get_quickshell_pids)"
+    if [[ -n "$pids" ]]; then
+        for pid in $pids; do
+            # Verificar se o processo é realmente quickshell e pertence ao usuário
+            if kill -0 "$pid" 2>/dev/null; then
+                local cmdline
+                cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+                if echo "$cmdline" | grep -qE "quickshell|qs"; then
+                    log "RECOVERY" "Enviando SIGTERM para Quickshell PID zumbi $pid..."
+                    kill -TERM "$pid" 2>/dev/null || true
+                fi
+            fi
+        done
+        sleep "$RECOVERY_CLEANUP_SLEEP"
+    fi
+
+    # 4. Iniciar processo correspondente
+    if [[ "$frontend" == "caelestia" ]]; then
+        local plugin_dir=""
+        plugin_dir="$(resolve_caelestia_plugin_dir || true)"
+        setsid -f env \
+            QML_IMPORT_PATH="$plugin_dir${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}" \
+            QML2_IMPORT_PATH="$plugin_dir${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}" \
+            qs -c caelestia-hybrid 9>&- \
+            >"$CAEL_LOG" 2>&1
+    else
+        setsid -f \
+            qs -c ii 9>&- \
+            >"$END4_LOG" 2>&1
+    fi
+
+    # Liberar switch lock
+    flock -u 9 2>/dev/null || true
+    exec 9>&-
+
+    # 5. Validação pós-inicialização (esperar até 6s)
+    local ready=false
+    for _ in $(seq 1 30); do
+        if [[ "$frontend" == "caelestia" ]] && running_caelestia; then
+            ready=true
+            break
+        elif [[ "$frontend" == "end4" ]] && running_end4; then
+            ready=true
+            break
+        fi
+        sleep "$RECOVERY_POLL_SLEEP"
+    done
+
+    if [[ "$ready" == "true" ]]; then
+        # Testar IPC
+        local ipc_time
+        if ipc_time="$(test_quickshell_ipc)"; then
+            log "OK" "Frontend '$frontend' reiniciado com sucesso! IPC responsivo (${ipc_time}ms)."
+            record_recovery_event
+            return 0
+        fi
+    fi
+
+    log "ERROR" "Frontend '$frontend' falhou ao reiniciar ou IPC não respondeu dentro do limite."
+    record_crash "$frontend" "Falha pós-reinício (timeout ou crash no startup)"
+    return 1
+}
+
+fallback_to_end4() {
+    log "FALLBACK" "Iniciando Nível 4: Fallback de segurança para end-4..."
+    notify_user "critical" "Recuperação Automática da Interface" "Múltiplas falhas detectadas no frontend. Retornando para interface segura end-4..."
+
+    if [[ -x "$UI_SWITCH_SCRIPT" ]]; then
+        if "$UI_SWITCH_SCRIPT" end4; then
+            log "OK" "Fallback para end-4 completado com sucesso via ui-switch.sh."
+            record_recovery_event
+            notify_user "normal" "Interface Restaurada" "A interface end-4 foi restaurada com sucesso."
+            return 0
+        fi
+    fi
+
+    # Se ui-switch.sh falhou ou não existe, tentar inicialização direta de end-4
+    log "WARN" "Tentando inicialização direta de emergência de end-4..."
+    if restart_active_frontend "end4"; then
+        log "OK" "Inicialização de emergência de end-4 bem sucedida."
+        printf 'end4\n' > "$CURRENT_FRONTEND_FILE" 2>/dev/null || true
+        return 0
+    fi
+
+    log "CRITICAL" "ERRO GRAVE: O fallback para end-4 também falhou. Ativando backoff."
+    set_backoff_state true "Ambos os frontends (Caelestia e end-4) falharam."
+    notify_user "critical" "Falha Crítica no Quickshell" "Não foi possível recuperar a interface gráfica. Abra um terminal e execute 'redshift-doctor'."
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# Subcomando: --status
+# -----------------------------------------------------------------------------
+cmd_status() {
+    printf "%b=== Redshift OS UI Recovery - Status dos Componentes ===%b\n" "$C_BOLD$C_CYAN" "$C_RESET"
+
+    # 1. Hyprland
+    local sig
+    if sig="$(resolve_hyprland_signature)" && check_hyprland_status; then
+        printf "  %-22s: %bAtivo%b (Assinatura: %s)\n" "Compositor Hyprland" "$C_OK" "$C_RESET" "$sig"
+    else
+        printf "  %-22s: %bInativo / Indisponível%b\n" "Compositor Hyprland" "$C_ERR" "$C_RESET"
+    fi
+
+    # 2. Frontend Configurado vs em Execução
+    local configured_fe running_fe
+    configured_fe="$(get_configured_frontend)"
+    running_fe="$(get_running_frontend)"
+
+    if [[ "$configured_fe" == "$running_fe" && "$running_fe" != "nenhum" && "$running_fe" != "conflito" ]]; then
+        printf "  %-22s: %b%s%b (Configurado e em execução)\n" "Frontend Ativo" "$C_OK" "$running_fe" "$C_RESET"
+    elif [[ "$running_fe" == "conflito" ]]; then
+        printf "  %-22s: %bCONFLITO%b (end-4 e Caelestia rodando simultaneamente)\n" "Frontend Ativo" "$C_ERR" "$C_RESET"
+    elif [[ "$running_fe" == "nenhum" ]]; then
+        printf "  %-22s: %bNenhum processo ativo%b (Esperado: %s)\n" "Frontend Ativo" "$C_ERR" "$C_RESET" "$configured_fe"
+    else
+        printf "  %-22s: %bDessincronizado%b (Configurado: %s, Rodando: %s)\n" "Frontend Ativo" "$C_WARN" "$C_RESET" "$configured_fe" "$running_fe"
+    fi
+
+    # 3. Processo Quickshell e PIDs
+    local pids
+    pids="$(get_quickshell_pids)"
+    if [[ -n "$pids" ]]; then
+        printf "  %-22s: %bRodando%b (PID(s): %s)\n" "Processo Quickshell" "$C_OK" "$C_RESET" "$pids"
+    else
+        printf "  %-22s: %bAusente%b\n" "Processo Quickshell" "$C_ERR" "$C_RESET"
+    fi
+
+    # 4. Teste de IPC
+    local ipc_time
+    if ipc_time="$(test_quickshell_ipc)"; then
+        printf "  %-22s: %bOK%b (Tempo de resposta: %sms)\n" "Teste de IPC Quickshell" "$C_OK" "$C_RESET" "$ipc_time"
+    else
+        printf "  %-22s: %bFALHA / TIMEOUT%b (> 1s ou congelado)\n" "Teste de IPC Quickshell" "$C_ERR" "$C_RESET"
+    fi
+
+    # 5. Status do Wallpaper
+    local wall_stat
+    wall_stat="$(check_wallpaper_status)"
+    if [[ "$wall_stat" == OK_* ]]; then
+        printf "  %-22s: %b%s%b\n" "Status do Wallpaper" "$C_OK" "$wall_stat" "$C_RESET"
+    elif [[ "$wall_stat" == WARN_* ]]; then
+        printf "  %-22s: %b%s%b\n" "Status do Wallpaper" "$C_WARN" "$wall_stat" "$C_RESET"
+    else
+        printf "  %-22s: %b%s%b\n" "Status do Wallpaper" "$C_ERR" "$wall_stat" "$C_RESET"
+    fi
+
+    # 6. Bloqueio de Tela
+    if is_screen_locked; then
+        printf "  %-22s: %bBloqueada%b (hyprlock ativo)\n" "Bloqueio de Tela" "$C_WARN" "$C_RESET"
+    else
+        printf "  %-22s: %bDesbloqueada%b\n" "Bloqueio de Tela" "$C_OK" "$C_RESET"
+    fi
+
+    # 7. Lock de Alternância de Interface
+    if is_switch_locked; then
+        printf "  %-22s: %bEm andamento%b (flock ativo em %s)\n" "Alternância de Interface" "$C_WARN" "$C_RESET" "$LOCK_FILE"
+    else
+        printf "  %-22s: %bLivre%b\n" "Alternância de Interface" "$C_OK" "$C_RESET"
+    fi
+
+    # 8. Watchdog
+    local wd_stat
+    wd_stat="$(check_watchdog_status)"
+    if [[ "$wd_stat" == systemd-active ]]; then
+        printf "  %-22s: %bAtivo%b (Systemd user service)\n" "Watchdog Supervisor" "$C_OK" "$C_RESET"
+    elif [[ "$wd_stat" == daemon-active* ]]; then
+        printf "  %-22s: %bAtivo%b (%s)\n" "Watchdog Supervisor" "$C_OK" "$C_RESET" "$wd_stat"
+    else
+        printf "  %-22s: %bInativo%b\n" "Watchdog Supervisor" "$C_DIM" "$C_RESET"
+    fi
+
+    # 9. Histórico de Crashes Recentes
+    local crashes_60s crashes_fe
+    crashes_60s="$(count_crashes_in_window "$configured_fe" 60)"
+    printf "  %-22s: %d falhas em 60s (Frontend: %s)\n" "Crashes Recentes" "$crashes_60s" "$configured_fe"
+
+    local backoff
+    backoff="$(is_backoff_active)"
+    if [[ "$backoff" == "true" ]]; then
+        printf "  %-22s: %bATIVO%b (Tentativas suspensas para evitar loop)\n" "Backoff de Segurança" "$C_ERR" "$C_RESET"
+    fi
+
+    echo
+}
+
+# -----------------------------------------------------------------------------
+# Subcomando: --check
+# Códigos de Saída:
+#   0 = Saudável
+#   1 = Erro Crítico (Hyprland inativo, Quickshell ausente/IPC congelado)
+#   2 = Aviso / Degradado (Wallpaper ausente/parado, dessincronizado)
+# -----------------------------------------------------------------------------
+cmd_check() {
+    local exit_code=0
+
+    # 1. Hyprland
+    if ! check_hyprland_status; then
+        log "ERROR" "Check falhou: Sessão Hyprland inativa."
+        return 1
+    fi
+
+    # 2. Processo Quickshell e IPC
+    local running_fe
+    running_fe="$(get_running_frontend)"
+    if [[ "$running_fe" == "nenhum" || "$running_fe" == "conflito" ]]; then
+        return 1
+    fi
+
+    if ! test_quickshell_ipc >/dev/null 2>&1; then
+        return 1
+    fi
+
+    # 3. Configuração vs Processo
+    local configured_fe
+    configured_fe="$(get_configured_frontend)"
+    if [[ "$configured_fe" != "$running_fe" ]]; then
+        exit_code=2
+    fi
+
+    # 4. Wallpaper
+    local wall_stat
+    wall_stat="$(check_wallpaper_status)"
+    if [[ "$wall_stat" != OK_* ]]; then
+        if (( exit_code < 2 )); then
+            exit_code=2
+        fi
+    fi
+
+    # 5. Crashes recentes
+    local recent_crashes
+    recent_crashes="$(count_crashes_in_window "$configured_fe" 60)"
+    if (( recent_crashes > 0 )); then
+        if (( exit_code < 2 )); then
+            exit_code=2
+        fi
+    fi
+
+    return "$exit_code"
+}
+
+# -----------------------------------------------------------------------------
+# Subcomando: --soft (Recuperação Conservadora em Níveis)
+# -----------------------------------------------------------------------------
+cmd_soft() {
+    log "INFO" "Iniciando verificação de recuperação conservadora (--soft)..."
+
+    # Nível 1: Não destrutivo
+    # 1.1 Se a sessão Hyprland estiver inativa, orientar usuário e sair
+    if ! check_hyprland_status; then
+        log "WARN" "Hyprland não detectado. Se estiver em TTY, inicie a sessão gráfica com Hyprland."
+        echo "Hyprland não está em execução nesta sessão. Se estiver em TTY, inicie a sessão gráfica com Hyprland." >&2
+        return 1
+    fi
+
+    # 1.2 Se a tela estiver bloqueada, abortar amigavelmente sem ações destrutivas
+    if is_screen_locked; then
+        log "INFO" "Nível 1: Tela bloqueada (hyprlock ativo). Nenhuma ação destrutiva será executada."
+        return 0
+    fi
+
+    # 1.3 Se switch.lock estiver adquirido por ui-switch.sh, não interferir
+    if is_switch_locked; then
+        log "INFO" "Nível 1: Alternância de interface em andamento (switch.lock). Aguardando conclusão."
+        return 0
+    fi
+
+    local configured_fe running_fe
+    configured_fe="$(get_configured_frontend)"
+    running_fe="$(get_running_frontend)"
+
+    local ipc_ok=false
+    if test_quickshell_ipc >/dev/null 2>&1; then
+        ipc_ok=true
+    fi
+
+    # 1.4 Se o processo e IPC estão saudáveis
+    if [[ ("$running_fe" == "end4" || "$running_fe" == "caelestia") && "$ipc_ok" == "true" ]]; then
+        if [[ "$configured_fe" != "$running_fe" ]]; then
+            log "INFO" "Nível 1: Sincronizando estado salvo ($configured_fe -> $running_fe) com o processo ativo saudável."
+            printf '%s\n' "$running_fe" > "$CURRENT_FRONTEND_FILE" 2>/dev/null || true
+            configured_fe="$running_fe"
+        fi
+
+        # Nível 2: Verificar se apenas o wallpaper está com problemas
+        local wall_stat
+        wall_stat="$(check_wallpaper_status)"
+        if [[ "$wall_stat" != OK_* ]]; then
+            log "WARN" "Nível 2: Quickshell operacional, mas wallpaper degradado ($wall_stat). Executando recuperação de wallpaper..."
+            execute_wallpaper_recovery
+            return 0
+        fi
+
+        log "INFO" "Nível 1: Quickshell e IPC totalmente íntegros. Nenhuma ação necessária."
+        return 0
+    fi
+
+    # Nível 3 / Nível 4: Quickshell ausente, em conflito ou congelado
+    log "WARN" "Inconsistência detectada (Configurado: $configured_fe, Rodando: $running_fe, IPC: $ipc_ok)."
+
+    # Verificar limite de falhas para acionamento de Fallback (Nível 4)
+    local crashes_60s
+    crashes_60s="$(count_crashes_in_window "$configured_fe" 60)"
+    if (( crashes_60s >= 3 )); then
+        log "WARN" "Frontend '$configured_fe' atingiu $crashes_60s falhas nos últimos 60 segundos."
+        if [[ "$configured_fe" == "caelestia" ]]; then
+            fallback_to_end4
+            return $?
+        else
+            log "CRITICAL" "end-4 atingiu limite crítico de crashes ($crashes_60s em 60s). Ativando backoff."
+            set_backoff_state true "end-4 em crash loop contínuo"
+            notify_user "critical" "Falha Contínua na Interface" "A interface end-4 falhou repetidamente. Consulte 'redshift-ui-recover --logs'."
+            return 1
+        fi
+    fi
+
+    # Executar reinício controlado do frontend ativo (Nível 3)
+    record_crash "$configured_fe" "Processo ausente ou timeout de IPC"
+    if restart_active_frontend "$configured_fe"; then
+        # Verificar wallpaper após subir o frontend
+        local wall_stat_post
+        wall_stat_post="$(check_wallpaper_status)"
+        if [[ "$wall_stat_post" != OK_* ]]; then
+            execute_wallpaper_recovery
+        fi
+        return 0
+    else
+        # Se falhou o reinício, checar novamente se atingiu limite para fallback
+        crashes_60s="$(count_crashes_in_window "$configured_fe" 60)"
+        if (( crashes_60s >= 3 )) && [[ "$configured_fe" == "caelestia" ]]; then
+            fallback_to_end4
+            return $?
+        fi
+        return 1
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Subcomando: --restart
+# -----------------------------------------------------------------------------
+cmd_restart() {
+    log "INFO" "Solicitação explícita de reinício forçado (--restart)..."
+    local configured_fe
+    configured_fe="$(get_configured_frontend)"
+
+    if is_screen_locked; then
+        echo "Aviso: A tela está bloqueada. Não é recomendável forçar reinício com a tela bloqueada."
+        read -r -p "Deseja continuar mesmo assim? [y/N] " ans || true
+        case "$ans" in
+            [yY]|[yY][eE][sS]) ;;
+            *) echo "Operação cancelada."; return 0 ;;
+        esac
+    fi
+
+    printf "Reiniciando frontend ativo '%s'...\n" "$configured_fe"
+    if restart_active_frontend "$configured_fe"; then
+        printf "%bFrontend '%s' reiniciado com sucesso!%b\n" "$C_OK" "$configured_fe" "$C_RESET"
+        execute_wallpaper_recovery >/dev/null 2>&1 || true
+        return 0
+    else
+        printf "%bFalha ao reiniciar '%s'. Verifique 'redshift-ui-recover --logs'.%b\n" "$C_ERR" "$configured_fe" "$C_RESET"
+        return 1
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Subcomando: --hard (Recuperação Completa / Hard Recovery)
+# -----------------------------------------------------------------------------
+cmd_hard() {
+    log "INFO" "Solicitação de recuperação completa forçada (--hard)..."
+    local configured_fe
+    configured_fe="$(get_configured_frontend)"
+
+    printf "Executando recuperação completa da interface (frontend: %s)...\n" "$configured_fe"
+    restart_active_frontend "$configured_fe" || true
+    execute_wallpaper_recovery >/dev/null 2>&1 || true
+
+    if command -v hyprctl >/dev/null 2>&1; then
+        hyprctl reload >/dev/null 2>&1 || true
+    fi
+
+    log "OK" "Recuperação completa finalizada com sucesso."
+    printf "%bInterface e compositor restaurados com sucesso!%b\n" "$C_OK" "$C_RESET"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# Subcomando: --logs
+# -----------------------------------------------------------------------------
+cmd_logs() {
+    local lines="${1:-50}"
+    if [[ -f "$RECOVERY_LOG" ]]; then
+        printf "%b=== Últimas %s linhas de log de recuperação (%s) ===%b\n" "$C_BOLD$C_CYAN" "$lines" "$RECOVERY_LOG" "$C_RESET"
+        tail -n "$lines" "$RECOVERY_LOG"
+    else
+        printf "Nenhum arquivo de log encontrado em %s.\n" "$RECOVERY_LOG"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Subcomando: --watchdog (Loop de Monitoramento Contínuo)
+# -----------------------------------------------------------------------------
+cmd_watchdog() {
+    log "WATCHDOG" "Iniciando Watchdog Supervisor do Redshift OS (PID $$)..."
+
+    # Prevenir múltiplas instâncias concorrentes do watchdog (singleton)
+    local wd_lock="$RECOVERY_DIR/watchdog.lock"
+    exec 7>"$wd_lock"
+    if ! flock -n 7 2>/dev/null; then
+        log "WATCHDOG" "Outra instância do Watchdog já está em execução. Encerrando duplicata."
+        exit 0
+    fi
+
+    # Trap para encerramento gracioso
+    cleanup_watchdog() {
+        log "WATCHDOG" "Watchdog finalizado graciosamente via sinal."
+        flock -u 7 2>/dev/null || true
+        exec 7>&-
+        exit 0
+    }
+    trap cleanup_watchdog SIGINT SIGTERM
+
+    local cooldown_notified=false
+
+    while true; do
+        # 1. Encerramento silencioso e limpo se a sessão Hyprland finalizar
+        if ! check_hyprland_status; then
+            log "WATCHDOG" "Sessão Hyprland não detectada ou finalizada. Encerrando watchdog."
+            exit 0
+        fi
+
+        # 2. Pausar silenciosamente se a tela estiver bloqueada
+        if is_screen_locked; then
+            sleep 5
+            continue
+        fi
+
+        # 3. Pausar silenciosamente se uma transição de interface estiver em andamento
+        if is_switch_locked; then
+            sleep 5
+            continue
+        fi
+
+        # 4. Avaliar saúde rápida
+        local quick_health=0
+        if ! test_quickshell_ipc >/dev/null 2>&1; then
+            quick_health=1
+        fi
+
+        if (( quick_health > 0 )); then
+            # Verificar backoff ativo
+            local backoff
+            backoff="$(is_backoff_active)"
+            if [[ "$backoff" == "true" ]]; then
+                # Se em backoff, aguardar mais tempo e não reiniciar em loop
+                sleep 15
+                continue
+            fi
+
+            # Verificar limite de recuperações automáticas (máx 3 recuperações em 5 minutos = 300s)
+            local rec_5m
+            rec_5m="$(count_recoveries_in_window 300)"
+            if (( rec_5m >= 3 )); then
+                if [[ "$cooldown_notified" != "true" ]]; then
+                    log "WARN" "Limite de 3 recuperações automáticas em 5 minutos atingido. Watchdog em cooldown de segurança."
+                    notify_user "critical" "Watchdog em Cooldown" "Limite de recuperações excedido. O supervisor pausou ações automáticas temporariamente."
+                    cooldown_notified=true
+                fi
+                sleep 10
+                continue
+            else
+                cooldown_notified=false
+            fi
+
+            # Executar recuperação conservadora
+            log "WATCHDOG" "Degradação ou falha detectada. Acionando recuperação conservadora..."
+            cmd_soft || true
+        fi
+
+        sleep 5
+    done
+}
+
+# -----------------------------------------------------------------------------
+# Exibição de Ajuda
+# -----------------------------------------------------------------------------
+show_help() {
+    cat << EOF
+Uso: $(basename "$0") [OPÇÃO]
+
+Utilitário de Diagnóstico, Recuperação e Supervisão da Interface do Redshift OS.
+
+Opções:
+  --status            Exibe relatório detalhado de saúde dos componentes gráficos.
+  --check             Verifica integridade (Exit: 0=OK, 1=Crítico, 2=Degradado/Aviso).
+  --soft              Executa recuperação conservadora em 4 níveis sem destruir sessão.
+  --restart           Força reinício controlado do frontend ativo com verificação pós-startup.
+  --hard              Recuperação completa forçada (frontend ativo + wallpaper + hyprctl reload).
+  --logs [LINHAS]     Exibe as últimas linhas do log de diagnóstico (padrão: 50).
+  --watchdog          Executa o supervisor em background/daemon a cada 5 segundos.
+  -h, --help          Exibe esta mensagem de ajuda.
+
+Arquivos de Diagnóstico:
+  Log:   $RECOVERY_LOG
+  State: $RECOVERY_STATE_FILE
+EOF
+}
+
+# -----------------------------------------------------------------------------
+# Ponto de Entrada Principal (CLI Routing)
+# -----------------------------------------------------------------------------
+case "${1:---status}" in
+    --status|status)
+        cmd_status
+        ;;
+    --check|check)
+        cmd_check
+        ;;
+    --soft|soft|--recover|recover)
+        cmd_soft
+        ;;
+    --restart|restart)
+        cmd_restart
+        ;;
+    --hard|hard)
+        cmd_hard
+        ;;
+    --logs|logs)
+        shift
+        cmd_logs "${1:-50}"
+        ;;
+    --watchdog|watchdog)
+        cmd_watchdog
+        ;;
+    -h|--help|help)
+        show_help
+        ;;
+    *)
+        echo "Opção inválida: $1" >&2
+        show_help
+        exit 2
+        ;;
+esac

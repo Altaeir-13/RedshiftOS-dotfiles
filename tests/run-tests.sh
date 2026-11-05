@@ -133,6 +133,9 @@ echo "qs $*" >> "$STATE_DIR/commands.log"
 
 case "${1:-}" in
     list)
+        if [[ "${MOCK_QS_IPC_FAIL:-0}" == "1" ]] || [[ -f "$STATE_DIR/qs_ipc_fail" ]]; then
+            exit 1
+        fi
         if [[ -f "$STATE_DIR/qs_ii_running" ]]; then
             echo "Config path: /mock/.config/quickshell/ii/shell.qml"
         fi
@@ -152,9 +155,9 @@ case "${1:-}" in
         ;;
     kill)
         if [[ "${3:-}" == "ii" ]]; then
-            rm -f "$STATE_DIR/qs_ii_running"
+            rm -f "$STATE_DIR/qs_ii_running" "$STATE_DIR/qs_ipc_fail"
         elif [[ "${3:-}" == "caelestia-hybrid" ]]; then
-            rm -f "$STATE_DIR/qs_cael_running"
+            rm -f "$STATE_DIR/qs_cael_running" "$STATE_DIR/qs_ipc_fail"
         fi
         exit 0
         ;;
@@ -163,7 +166,7 @@ case "${1:-}" in
         shift 2 || true
         if [[ "${1:-}" == "ipc" ]]; then
             echo "qs_ipc $cfg $*" >> "$STATE_DIR/ipc.log"
-            if [[ "${MOCK_QS_IPC_FAIL:-0}" == "1" ]]; then
+            if [[ "${MOCK_QS_IPC_FAIL:-0}" == "1" ]] || [[ -f "$STATE_DIR/qs_ipc_fail" ]]; then
                 exit 1
             fi
             exit 0
@@ -200,9 +203,20 @@ EOF
 #!/usr/bin/env bash
 STATE_DIR="${MOCK_STATE_DIR:?}"
 echo "hyprctl $*" >> "$STATE_DIR/hyprctl.log"
+if [[ "${MOCK_HYPRLAND_DEAD:-0}" == "1" ]] || [[ -f "$STATE_DIR/hyprland_dead" ]]; then
+    exit 1
+fi
 if [[ "${1:-}" == "reload" && "${MOCK_HYPRCTL_RELOAD_FAIL:-0}" == "1" ]]; then
     echo "Mock hyprctl reload error" >&2
     exit 1
+fi
+if [[ "${1:-}" == "monitors" ]]; then
+    if [[ -f "$STATE_DIR/hyprctl_monitors.json" ]]; then
+        cat "$STATE_DIR/hyprctl_monitors.json"
+        exit 0
+    fi
+    echo '[{"id": 0, "name": "eDP-1", "focused": true, "width": 1920, "height": 1080}]'
+    exit 0
 fi
 if [[ "${1:-}" == "hyprsunset" && "${2:-}" == "temperature" ]]; then
     if [[ -n "${3:-}" ]]; then
@@ -300,6 +314,42 @@ STATE_DIR="${MOCK_STATE_DIR:-/tmp}"
 echo "yay $*" >> "$STATE_DIR/commands.log"
 exit 0
 MOCK_YAY
+
+    # Mock `systemctl`
+    cat > "$sb/bin/systemctl" <<'MOCK_SYSTEMCTL'
+#!/usr/bin/env bash
+STATE_DIR="${MOCK_STATE_DIR:-/tmp}"
+echo "systemctl $*" >> "$STATE_DIR/systemctl.log"
+if [[ "${1:-}" == "--user" ]]; then
+    shift
+fi
+case "${1:-}" in
+    is-active)
+        if [[ -f "$STATE_DIR/systemd_service_active" ]]; then
+            exit 0
+        fi
+        exit 1
+        ;;
+    start)
+        touch "$STATE_DIR/systemd_service_active"
+        exit 0
+        ;;
+    stop)
+        rm -f "$STATE_DIR/systemd_service_active"
+        exit 0
+        ;;
+    restart)
+        touch "$STATE_DIR/systemd_service_active"
+        exit 0
+        ;;
+    status)
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+MOCK_SYSTEMCTL
 
     chmod +x "$sb/bin/"*
     printf '%s\n' "$sb"
@@ -2037,6 +2087,618 @@ fi
         fail "redshift-doctor não rejeitou render_power=10 como esperado"
     fi
 )
+
+# -----------------------------------------------------------------------------
+# 13. Redshift UI Recovery, Integração de Instalador e Resiliência (Cenários A a O)
+# -----------------------------------------------------------------------------
+printf "\n${CLR_CYAN}=== 13. Redshift UI Recovery, Integração de Instalador e Resiliência (Cenários A a O) ===${CLR_RST}\n"
+
+# 1. Validação estática de arquivos e executabilidade
+assert_file_exists "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" "Launcher dots/.local/bin/redshift-ui-recover existe"
+if [[ -x "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" ]]; then
+    pass "redshift-ui-recover possui permissão de execução (+x)"
+else
+    fail "redshift-ui-recover sem permissão de execução"
+fi
+
+assert_file_exists "${REPO_ROOT}/dots/.local/share/applications/redshift-ui-recover.desktop" "Arquivo redshift-ui-recover.desktop existe"
+assert_file_exists "${REPO_ROOT}/dots/.config/systemd/user/redshift-ui-watchdog.service" "Serviço redshift-ui-watchdog.service existe"
+assert_file_exists "${REPO_ROOT}/dots/.local/share/redshift-os/recovery/recover-wallpaper.sh" "Script dots/.local/share/redshift-os/recovery/recover-wallpaper.sh existe"
+if [[ -x "${REPO_ROOT}/dots/.local/share/redshift-os/recovery/recover-wallpaper.sh" ]]; then
+    pass "recover-wallpaper.sh possui permissão de execução (+x)"
+else
+    fail "recover-wallpaper.sh sem permissão de execução"
+fi
+
+# 2. Verificação de integração nos perfis e instalador (minimal, hybrid, complete, legacy, exp)
+(
+    for prof in minimal hybrid complete; do
+        prof_file="${REPO_ROOT}/sdata/profiles/${prof}.conf"
+        grep -q 'XDG_BIN_HOME/redshift-ui-recover' "$prof_file" || exit 1
+        grep -q 'XDG_DATA_HOME/applications/redshift-ui-recover.desktop' "$prof_file" || exit 2
+        grep -q 'XDG_CONFIG_HOME/systemd/user/redshift-ui-watchdog.service' "$prof_file" || exit 3
+    done
+
+    grep -q 'install_file "dots/.local/bin/redshift-ui-recover"' "${REPO_ROOT}/sdata/subcmd-install/3.files-legacy.sh" || exit 4
+    grep -q 'install_file "dots/.local/share/applications/redshift-ui-recover.desktop"' "${REPO_ROOT}/sdata/subcmd-install/3.files-legacy.sh" || exit 5
+    grep -q 'install_file "dots/.config/systemd/user/redshift-ui-watchdog.service"' "${REPO_ROOT}/sdata/subcmd-install/3.files-legacy.sh" || exit 6
+
+    grep -q 'dots/.local/bin/redshift-ui-recover' "${REPO_ROOT}/sdata/subcmd-install/3.files-exp.yaml" || exit 7
+    grep -q 'dots/.local/share/applications/redshift-ui-recover.desktop' "${REPO_ROOT}/sdata/subcmd-install/3.files-exp.yaml" || exit 8
+    grep -q 'dots/.config/systemd/user/redshift-ui-watchdog.service' "${REPO_ROOT}/sdata/subcmd-install/3.files-exp.yaml" || exit 9
+) && pass "Perfis (minimal, hybrid, complete), manifestos e instalador integram novos componentes do UI Recovery" \
+  || fail "Falha na integração dos componentes nos perfis ou no instalador"
+
+# 3. Teste de instalação em sandbox via ./setup install-files
+(
+    sb_inst="$(create_sandbox "ui-install-sandbox")"
+    export HOME="$sb_inst/home"
+    export XDG_CONFIG_HOME="$sb_inst/home/.config"
+    export XDG_DATA_HOME="$sb_inst/home/.local/share"
+    export XDG_BIN_HOME="$sb_inst/home/.local/bin"
+    export PATH="$sb_inst/bin:$PATH"
+    export MOCK_STATE_DIR="$sb_inst/mock-state"
+
+    iso_inst="$(create_isolated_repo "ui-install-repo")"
+    "$iso_inst/setup" install-files -p hybrid -f --skip-allgreeting >/dev/null
+
+    assert_file_exists "$XDG_BIN_HOME/redshift-ui-recover" "Instalação Sandbox: redshift-ui-recover copiado para ~/.local/bin"
+    assert_file_exists "$XDG_DATA_HOME/applications/redshift-ui-recover.desktop" "Instalação Sandbox: redshift-ui-recover.desktop copiado para ~/.local/share/applications"
+    assert_file_exists "$XDG_CONFIG_HOME/systemd/user/redshift-ui-watchdog.service" "Instalação Sandbox: redshift-ui-watchdog.service copiado para ~/.config/systemd/user"
+    assert_file_exists "$XDG_DATA_HOME/redshift-os/recovery/recover-wallpaper.sh" "Instalação Sandbox: recover-wallpaper.sh copiado para ~/.local/share/redshift-os/recovery"
+)
+
+# 4. Suíte sintética de testes de recuperação de wallpaper (11 cenários)
+if "${REPO_ROOT}/tests/test_recover_wallpaper.sh" >/dev/null 2>&1; then
+    pass "Suíte de testes sintéticos de recuperação de wallpaper e preservação de temas (11 cenários) aprovada"
+else
+    fail "Suíte de testes sintéticos de recuperação de wallpaper e preservação de temas falhou"
+fi
+
+# 5. Cenários Comportamentais de UI Recovery (Cenários A a O)
+export RECOVERY_GRACE_SLEEP=0.01
+export RECOVERY_CLEANUP_SLEEP=0.01
+export RECOVERY_POLL_SLEEP=0.01
+
+# Cenário A: Quickshell do end-4 é encerrado inesperadamente -> detectado e recuperado
+(
+    sb="$(create_sandbox "ui-scen-a")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_a"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/quickshell/ii/assets/images" "$XDG_CONFIG_HOME/illogical-impulse"
+    printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    touch "$XDG_CONFIG_HOME/quickshell/ii/assets/images/default_wallpaper.png"
+    echo "{\"background\": {\"wallpaperPath\": \"$XDG_CONFIG_HOME/quickshell/ii/assets/images/default_wallpaper.png\"}}" > "$XDG_CONFIG_HOME/illogical-impulse/config.json"
+    rm -f "$MOCK_STATE_DIR/qs_ii_running"
+
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 1
+
+    grep -q "qs -c ii" "$MOCK_STATE_DIR/commands.log" || exit 2
+    [[ -f "$MOCK_STATE_DIR/qs_ii_running" ]] || exit 3
+) && pass "Cenário A: Quickshell do end-4 encerrado inesperadamente — Detectado e recuperado com sucesso" \
+  || fail "Cenário A: Quickshell do end-4 encerrado inesperadamente — Falha na recuperação"
+
+# Cenário B: Quickshell do Caelestia é encerrado inesperadamente -> recuperado sem matar Firefox/Kitty/Store
+(
+    sb="$(create_sandbox "ui-scen-b")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_b"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid" "$XDG_CONFIG_HOME/illogical-impulse"
+    printf 'caelestia\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    export CAELESTIA_QML_PATH="$sb/qml"
+    rm -f "$MOCK_STATE_DIR/qs_cael_running"
+
+    # Spawn mock background user processes
+    ( exec -a "firefox" sleep 30 ) &
+    pid_firefox=$!
+    ( exec -a "kitty" sleep 30 ) &
+    pid_kitty=$!
+    ( exec -a "redshift-store" sleep 30 ) &
+    pid_store=$!
+
+    cleanup_b() {
+        kill "$pid_firefox" "$pid_kitty" "$pid_store" 2>/dev/null || true
+    }
+    trap cleanup_b EXIT
+
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 1
+
+    grep -q "qs -c caelestia-hybrid" "$MOCK_STATE_DIR/commands.log" || exit 2
+    [[ -f "$MOCK_STATE_DIR/qs_cael_running" ]] || exit 3
+
+    # Ensure user applications were NOT terminated
+    kill -0 "$pid_firefox" 2>/dev/null || exit 4
+    kill -0 "$pid_kitty" 2>/dev/null || exit 5
+    kill -0 "$pid_store" 2>/dev/null || exit 6
+) && pass "Cenário B: Quickshell do Caelestia encerrado inesperadamente — Recuperado sem matar Firefox/Kitty/Store" \
+  || fail "Cenário B: Quickshell do Caelestia encerrado inesperadamente — Processos de usuário afetados ou recuperação falhou"
+
+# Cenário C: Apenas o componente de wallpaper falha -> restaurado sem tocar na barra ou regerar paletas Material You
+(
+    sb="$(create_sandbox "ui-scen-c")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_c"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/quickshell/ii" "$XDG_CONFIG_HOME/illogical-impulse"
+    printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    touch "$MOCK_STATE_DIR/qs_ii_running"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/user/generated/wallpaper"
+    echo '{"primary": "#ffb4ab", "surface": "#1a1110"}' > "$XDG_STATE_HOME/quickshell/user/generated/colors.json"
+    echo "scheme-expressive" > "$XDG_STATE_HOME/quickshell/user/generated/applied_scheme_type.txt"
+    initial_colors_sha="$(sha256sum "$XDG_STATE_HOME/quickshell/user/generated/colors.json" | cut -d' ' -f1)"
+    initial_scheme_sha="$(sha256sum "$XDG_STATE_HOME/quickshell/user/generated/applied_scheme_type.txt" | cut -d' ' -f1)"
+
+    mkdir -p "$XDG_DATA_HOME/redshift-os/recovery"
+    cat > "$XDG_DATA_HOME/redshift-os/recovery/recover-wallpaper.sh" <<'EOF'
+#!/bin/bash
+touch "${MOCK_STATE_DIR:?}/wallpaper_recovered"
+exit 0
+EOF
+    chmod +x "$XDG_DATA_HOME/redshift-os/recovery/recover-wallpaper.sh"
+    export WALLPAPER_RECOVER_SCRIPT="$XDG_DATA_HOME/redshift-os/recovery/recover-wallpaper.sh"
+
+    echo '{"background": {"wallpaperPath": "/nonexistent/invalid_wallpaper.png"}}' > "$XDG_CONFIG_HOME/illogical-impulse/config.json"
+    : > "$MOCK_STATE_DIR/commands.log"
+
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 1
+
+    [[ -f "$MOCK_STATE_DIR/wallpaper_recovered" ]] || exit 2
+    if grep -q "kill" "$MOCK_STATE_DIR/commands.log"; then
+        exit 3
+    fi
+
+    post_colors_sha="$(sha256sum "$XDG_STATE_HOME/quickshell/user/generated/colors.json" | cut -d' ' -f1)"
+    post_scheme_sha="$(sha256sum "$XDG_STATE_HOME/quickshell/user/generated/applied_scheme_type.txt" | cut -d' ' -f1)"
+    [[ "$initial_colors_sha" == "$post_colors_sha" ]] || exit 4
+    [[ "$initial_scheme_sha" == "$post_scheme_sha" ]] || exit 5
+) && pass "Cenário C: Apenas wallpaper falha — Restaurado sem tocar na barra ou regerar paletas Material You" \
+  || fail "Cenário C: Apenas wallpaper falha — Falha na restauração seletiva"
+
+# Cenário D: Frontend continua com processo ativo, mas seu IPC falha/trava -> detectado por timeout e recuperado
+(
+    sb="$(create_sandbox "ui-scen-d")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_d"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/quickshell/ii" "$XDG_CONFIG_HOME/illogical-impulse"
+    printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    touch "$MOCK_STATE_DIR/qs_ii_running"
+    touch "$MOCK_STATE_DIR/qs_ipc_fail"
+
+    chk_code=0
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --check >/dev/null 2>&1 || chk_code=$?
+    [[ "$chk_code" -ne 0 ]] || exit 1
+
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 2
+
+    grep -q "qs kill" "$MOCK_STATE_DIR/commands.log" || exit 3
+    grep -q "qs -c ii" "$MOCK_STATE_DIR/commands.log" || exit 4
+    [[ -f "$MOCK_STATE_DIR/qs_ii_running" ]] || exit 5
+) && pass "Cenário D: Frontend ativo com IPC congelado — Detectado por timeout e recuperado com sucesso" \
+  || fail "Cenário D: Frontend ativo com IPC congelado — Falha na detecção ou reinício"
+
+# Cenário E: Usuário oculta intencionalmente a barra (SUPER + J) -> não considerado como crash
+(
+    sb="$(create_sandbox "ui-scen-e")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_e"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/quickshell/ii/assets/images" "$XDG_CONFIG_HOME/illogical-impulse"
+    printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    touch "$MOCK_STATE_DIR/qs_ii_running"
+    touch "$XDG_CONFIG_HOME/quickshell/ii/assets/images/default_wallpaper.png"
+    echo "{\"background\": {\"wallpaperPath\": \"$XDG_CONFIG_HOME/quickshell/ii/assets/images/default_wallpaper.png\"}}" > "$XDG_CONFIG_HOME/illogical-impulse/config.json"
+
+    grep -q 'hl.bind("SUPER + J", hl.dsp.global("quickshell:barToggle")' "${REPO_ROOT}/dots/.config/hypr/hyprland/keybinds.lua" || exit 1
+
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --check >/dev/null 2>&1 || exit 2
+
+    : > "$MOCK_STATE_DIR/commands.log"
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 3
+
+    if grep -qE "kill|-c ii|-c caelestia" "$MOCK_STATE_DIR/commands.log"; then
+        exit 4
+    fi
+
+    state_file="$XDG_STATE_HOME/redshift-os/ui-recovery-state.json"
+    if [[ -f "$state_file" ]]; then
+        crashes="$(jq -r '.crashes_by_frontend.end4 // 0' "$state_file" 2>/dev/null || echo 0)"
+        [[ "$crashes" -eq 0 ]] || exit 5
+    fi
+) && pass "Cenário E: Barra ocultada intencionalmente (SUPER + J) — Não considerado como crash e sessão preservada" \
+  || fail "Cenário E: Barra ocultada intencionalmente (SUPER + J) — Trato indevido como crash"
+
+# Cenário F: Usuário alterna entre end-4 e Caelestia (ui-switch.sh) -> watchdog respeita switch.lock e não entra em corrida
+(
+    sb="$(create_sandbox "ui-scen-f")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_f"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch"
+    lock_file="$XDG_STATE_HOME/quickshell/ui-switch/switch.lock"
+
+    exec 9>"$lock_file"
+    flock -n 9 || exit 1
+
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 2
+
+    flock -u 9 2>/dev/null || true
+    exec 9>&-
+
+    log_file="$XDG_STATE_HOME/redshift-os/ui-recovery.log"
+    [[ -f "$log_file" ]] || exit 3
+    grep -qi "switch.lock" "$log_file" || exit 4
+) && pass "Cenário F: Alternância de interface (ui-switch.sh) — Watchdog respeita switch.lock e evita corrida" \
+  || fail "Cenário F: Alternância de interface (ui-switch.sh) — Conflito ou corrida com switch.lock"
+
+# Cenário G: Frontend entra em ciclo de falhas -> backoff impede loop infinito e aciona rollback para end-4 se Caelestia falhar
+(
+    sb="$(create_sandbox "ui-scen-g")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_g"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid" "$XDG_CONFIG_HOME/quickshell/ii" "$XDG_STATE_HOME/redshift-os"
+    printf 'caelestia\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+
+    cat > "$XDG_CONFIG_HOME/quickshell/ui-switch.sh" <<'EOF'
+#!/bin/bash
+if [[ "${1:-}" == "end4" ]]; then
+    printf 'end4\n' > "${XDG_STATE_HOME}/quickshell/ui-switch/current"
+    touch "${MOCK_STATE_DIR:?}/qs_ii_running"
+    exit 0
+fi
+exit 1
+EOF
+    chmod +x "$XDG_CONFIG_HOME/quickshell/ui-switch.sh"
+
+    now="$(date +%s)"
+    cat > "$XDG_STATE_HOME/redshift-os/ui-recovery-state.json" <<EOF
+{
+  "updated_at": "2026-11-05T12:00:00Z",
+  "recent_crashes": [
+    {"timestamp": $((now - 10)), "frontend": "caelestia", "reason": "crash 1"},
+    {"timestamp": $((now - 5)), "frontend": "caelestia", "reason": "crash 2"},
+    {"timestamp": $((now - 1)), "frontend": "caelestia", "reason": "crash 3"}
+  ],
+  "recent_recoveries": [],
+  "crashes_by_frontend": {"caelestia": 3, "end4": 0},
+  "backoff_active": false,
+  "backoff_reason": null
+}
+EOF
+
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 1
+    [[ "$(cat "$XDG_STATE_HOME/quickshell/ui-switch/current")" == "end4" ]] || exit 2
+
+    cat > "$XDG_STATE_HOME/redshift-os/ui-recovery-state.json" <<EOF
+{
+  "updated_at": "2026-11-05T12:00:00Z",
+  "recent_crashes": [
+    {"timestamp": $((now - 10)), "frontend": "end4", "reason": "crash 1"},
+    {"timestamp": $((now - 5)), "frontend": "end4", "reason": "crash 2"},
+    {"timestamp": $((now - 1)), "frontend": "end4", "reason": "crash 3"}
+  ],
+  "recent_recoveries": [],
+  "crashes_by_frontend": {"caelestia": 3, "end4": 3},
+  "backoff_active": false,
+  "backoff_reason": null
+}
+EOF
+    rm -f "$MOCK_STATE_DIR/qs_ii_running"
+
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || true
+
+    backoff="$(jq -r '.backoff_active // false' "$XDG_STATE_HOME/redshift-os/ui-recovery-state.json")"
+    [[ "$backoff" == "true" ]] || exit 3
+) && pass "Cenário G: Ciclo de falhas do frontend — Rollback para end-4 e backoff ativo contra loop infinito" \
+  || fail "Cenário G: Ciclo de falhas do frontend — Falha no rollback ou backoff"
+
+# Cenário H: Atalhos de emergência no Hyprland (Super + Ctrl + Shift + B e Ctrl + Super + R)
+(
+    keybinds_file="${REPO_ROOT}/dots/.config/hypr/hyprland/keybinds.lua"
+    [[ -f "$keybinds_file" ]] || exit 1
+
+    grep -q 'hl.bind("CTRL + SUPER + SHIFT + B", hl.dsp.exec_cmd("redshift-ui-recover --soft")' "$keybinds_file" || exit 2
+    grep -q 'hl.bind("CTRL + SUPER + R", hl.dsp.exec_cmd("redshift-ui-recover --restart")' "$keybinds_file" || exit 3
+
+    sb="$(create_sandbox "ui-scen-h")"
+    export PATH="${REPO_ROOT}/dots/.local/bin:$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_h"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch"
+    printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+
+    redshift-ui-recover --soft >/dev/null 2>&1 || exit 4
+) && pass "Cenário H: Atalhos de emergência no Hyprland — Super+Ctrl+Shift+B e Ctrl+Super+R integrados e funcionais" \
+  || fail "Cenário H: Atalhos de emergência no Hyprland — Configuração ausente ou comando inválido"
+
+# Cenário I: Opção de recuperação pelo launcher (.desktop com redshift-ui-recover --soft)
+(
+    desktop_file="${REPO_ROOT}/dots/.local/share/applications/redshift-ui-recover.desktop"
+    [[ -f "$desktop_file" ]] || exit 1
+
+    if command -v desktop-file-validate >/dev/null 2>&1; then
+        desktop-file-validate "$desktop_file" 2>&1 || true
+    fi
+
+    grep -q '^Type=Application' "$desktop_file" || exit 2
+    grep -q '^Name=' "$desktop_file" || exit 3
+    grep -q '^Exec=redshift-ui-recover --soft' "$desktop_file" || exit 4
+    grep -q '^Icon=redshift-symbolic' "$desktop_file" || exit 5
+    grep -q '^Categories=.*Utility' "$desktop_file" || exit 6
+    grep -q '\[Desktop Action Restart\]' "$desktop_file" || exit 7
+    grep -q 'Exec=redshift-ui-recover --restart' "$desktop_file" || exit 8
+    grep -q '\[Desktop Action Hard\]' "$desktop_file" || exit 9
+    grep -q 'Exec=redshift-ui-recover --hard' "$desktop_file" || exit 10
+) && pass "Cenário I: Entrada do menu (.desktop) — Launcher, ações contextuais e ícone validados" \
+  || fail "Cenário I: Entrada do menu (.desktop) — Inconsistência nos metadados do launcher"
+
+# Cenário J: Comandos CLI via terminal (--status, --check, --soft, --restart, --logs, --help)
+(
+    sb="$(create_sandbox "ui-scen-j")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_j"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/quickshell/ii/assets/images" "$XDG_CONFIG_HOME/illogical-impulse"
+    printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    touch "$MOCK_STATE_DIR/qs_ii_running"
+    wall="$XDG_CONFIG_HOME/quickshell/ii/assets/images/default_wallpaper.png"
+    touch "$wall"
+    echo "{\"background\": {\"wallpaperPath\": \"$wall\"}}" > "$XDG_CONFIG_HOME/illogical-impulse/config.json"
+
+    stat_out="$("${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --status)" || exit 1
+    echo "$stat_out" | grep -qi "Compositor Hyprland" || exit 2
+    echo "$stat_out" | grep -qi "Frontend Ativo" || exit 3
+
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --check >/dev/null 2>&1 || exit 4
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 5
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --restart >/dev/null 2>&1 || exit 6
+
+    log_out="$("${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --logs 20)" || exit 7
+    echo "$log_out" | grep -qi "linhas de log" || exit 8
+
+    help_out="$("${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --help)" || exit 9
+    echo "$help_out" | grep -qi "Uso:" || exit 10
+) && pass "Cenário J: Comandos CLI via terminal — Todos os subcomandos (--status, --check, --soft, --restart, --logs) operacionais" \
+  || fail "Cenário J: Comandos CLI via terminal — Falha na interface de linha de comando"
+
+# Cenário K: Inicialização após logout/login -> estado limpo, sem processos duplicados
+(
+    sb="$(create_sandbox "ui-scen-k")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_k"
+
+    mkdir -p "$XDG_STATE_HOME/redshift-os"
+    lock_file="$XDG_STATE_HOME/redshift-os/watchdog.lock"
+    exec 7>"$lock_file"
+    flock -n 7 || exit 1
+
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --watchdog >/dev/null 2>&1 || exit 2
+
+    flock -u 7 2>/dev/null || true
+    exec 7>&-
+
+    grep -q 'redshift-ui-watchdog.service' "${REPO_ROOT}/dots/.config/hypr/hyprland/execs.lua" || exit 3
+) && pass "Cenário K: Inicialização após logout/login — Singleton garantido, sem duplicação de processos watchdog" \
+  || fail "Cenário K: Inicialização após logout/login — Falha no tratamento de concorrência ou reinicialização"
+
+# Cenário L: Sessão bloqueada (hyprlock ativo) -> recuperação destrutiva suspensa e lockscreen preservada
+(
+    sb="$(create_sandbox "ui-scen-l")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_l"
+
+    touch "$MOCK_STATE_DIR/hyprlock_running"
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch"
+    printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    rm -f "$MOCK_STATE_DIR/qs_ii_running"
+
+    : > "$MOCK_STATE_DIR/commands.log"
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 1
+
+    if grep -qE "kill|-c ii|-c caelestia" "$MOCK_STATE_DIR/commands.log"; then
+        exit 2
+    fi
+
+    grep -qi "hyprlock ativo" "$XDG_STATE_HOME/redshift-os/ui-recovery.log" || exit 3
+) && pass "Cenário L: Sessão bloqueada (hyprlock ativo) — Recuperação destrutiva suspensa e lockscreen preservada" \
+  || fail "Cenário L: Sessão bloqueada (hyprlock ativo) — Ação indevida durante lockscreen"
+
+# Cenário M: Frontend saudável executado novamente -> idempotente, zero ações destrutivas
+(
+    sb="$(create_sandbox "ui-scen-m")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_m"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/quickshell/ii/assets/images" "$XDG_CONFIG_HOME/illogical-impulse"
+    printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    touch "$MOCK_STATE_DIR/qs_ii_running"
+
+    wall_file="$XDG_CONFIG_HOME/quickshell/ii/assets/images/default_wallpaper.png"
+    touch "$wall_file"
+    echo "{\"background\": {\"wallpaperPath\": \"$wall_file\"}}" > "$XDG_CONFIG_HOME/illogical-impulse/config.json"
+
+    : > "$MOCK_STATE_DIR/commands.log"
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 1
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 2
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 3
+
+    if grep -qE "kill|-c ii|-c caelestia" "$MOCK_STATE_DIR/commands.log"; then
+        exit 4
+    fi
+) && pass "Cenário M: Execução repetida em ambiente íntegro — Totalmente idempotente e zero ações destrutivas" \
+  || fail "Cenário M: Execução repetida em ambiente íntegro — Falha de idempotência"
+
+# Cenário N: Múltiplos monitores com desconexão -> recuperação resiliente a geometrias nulas
+(
+    sb="$(create_sandbox "ui-scen-n")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_n"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/quickshell/ii/assets/images" "$XDG_CONFIG_HOME/illogical-impulse"
+    printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    touch "$MOCK_STATE_DIR/qs_ii_running"
+
+    echo '[]' > "$MOCK_STATE_DIR/hyprctl_monitors.json"
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 1
+
+    cat > "$MOCK_STATE_DIR/hyprctl_monitors.json" <<'EOF'
+[{"id": 0, "name": "eDP-1", "focused": false, "width": 0, "height": 0, "scale": 0}]
+EOF
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --status >/dev/null 2>&1 || exit 2
+) && pass "Cenário N: Múltiplos monitores e desconexão — Recuperação opera sem falhas em geometrias nulas" \
+  || fail "Cenário N: Múltiplos monitores e desconexão — Quebra com geometrias nulas"
+
+# Cenário O: Compositor Hyprland encerra completamente -> reconhece término, orientação TTY e sai sem loops
+(
+    sb="$(create_sandbox "ui-scen-o")"
+    export PATH="$sb/bin:$PATH"
+    export MOCK_STATE_DIR="$sb/mock-state"
+    export HOME="$sb/home"
+    export XDG_CONFIG_HOME="$sb/home/.config"
+    export XDG_DATA_HOME="$sb/home/.local/share"
+    export XDG_STATE_HOME="$sb/home/.local/state"
+    export XDG_CACHE_HOME="$sb/home/.cache"
+    export XDG_BIN_HOME="$sb/home/.local/bin"
+    export XDG_RUNTIME_DIR="$sb/runtime"
+    mkdir -p "$XDG_RUNTIME_DIR"
+
+    unset HYPRLAND_INSTANCE_SIGNATURE
+    rm -rf "$XDG_RUNTIME_DIR/hypr"
+    touch "$MOCK_STATE_DIR/hyprland_dead"
+
+    chk_code=0
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --check >/dev/null 2>&1 || chk_code=$?
+    [[ "$chk_code" -eq 1 ]] || exit 1
+
+    soft_code=0
+    soft_out="$("${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft 2>&1)" || soft_code=$?
+    [[ "$soft_code" -eq 1 ]] || exit 2
+    echo "$soft_out" | grep -qi "Hyprland não está em execução" || exit 3
+
+    timeout 5 "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --watchdog >/dev/null 2>&1 || exit 4
+) && pass "Cenário O: Compositor Hyprland inativo — Detecção de término, orientação para TTY e encerramento seguro" \
+  || fail "Cenário O: Compositor Hyprland inativo — Comportamento inadequado sem compositor"
+
+# 6. Diagnóstico de UI no Redshift Doctor
+(
+    sb_doc="$(create_sandbox "ui-doctor-sandbox")"
+    export PATH="${REPO_ROOT}/dots/.local/bin:$sb_doc/bin:$PATH"
+    export MOCK_STATE_DIR="$sb_doc/mock-state"
+    export HOME="$sb_doc/home"
+    export XDG_CONFIG_HOME="$sb_doc/home/.config"
+    export XDG_DATA_HOME="$sb_doc/home/.local/share"
+    export XDG_STATE_HOME="$sb_doc/home/.local/state"
+    export XDG_CACHE_HOME="$sb_doc/home/.cache"
+    export XDG_BIN_HOME="$sb_doc/home/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE="test_sig_doc"
+
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/quickshell/ii/assets/images" "$XDG_CONFIG_HOME/illogical-impulse"
+    printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    touch "$MOCK_STATE_DIR/qs_ii_running"
+
+    wall_file="$XDG_CONFIG_HOME/quickshell/ii/assets/images/default_wallpaper.png"
+    touch "$wall_file"
+    echo "{\"background\": {\"wallpaperPath\": \"$wall_file\"}}" > "$XDG_CONFIG_HOME/illogical-impulse/config.json"
+
+    doc_out="$("${REPO_ROOT}/dots/.local/bin/redshift-doctor" --check ui --json 2>&1)" || exit 1
+    echo "$doc_out" | grep -Fq '"status": "ok"' || exit 2
+) && pass "Redshift Doctor: Diagnóstico de integridade da UI (--check ui) executado com sucesso" \
+  || fail "Redshift Doctor: Falha no diagnóstico de integridade da UI (--check ui)"
 
 printf "\n=============================================================================\n"
 printf "Resumo dos Testes: ${CLR_GREEN}%d aprovados${CLR_RST}, ${CLR_RED}%d falharam${CLR_RST} (total: %d)\n" \

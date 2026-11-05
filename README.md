@@ -55,7 +55,8 @@ A alternância entre as duas interfaces ocorre em **tempo de execução com um �
 - 🔒 **Dispatcher Inteligente de Bloqueio (`rice-lock`):** Gerencia a tela de bloqueio respeitando preferências locais (`hyprlock` nativo com o emblema Redshift OS centralizado ou lockers integrados do Quickshell).
 - ⌨️ **Layout de Teclado `us` / `br`:** Alternância rápida entre teclados com atalhos de brilho e áudio unificados.
 - 🛍️ **Redshift Store Nativa:** Central de aplicativos em Qt6/QML integrada nativamente ao Arch Linux (`pacman`, `yay`, AUR e AppStream), com atualização reativa aos 49 tokens Material You do sistema e guardrails de segurança avançados.
-- 📦 **Perfis Declarativos de Instalação:** Instale exatamente o que precisa através dos perfis `minimal`, `hybrid` ou `complete` (todos integrando a Redshift Store).
+- 🛡️ **Redshift UI Recovery & Watchdog:** Sistema inteligente de supervisão contínua e recuperação da interface gráfica em 4 níveis (`redshift-ui-recover`), com atalhos de emergência no teclado (`Super + Ctrl + Shift + B` e `Ctrl + Super + R`), entrada de menu no launcher, serviço watchdog no systemd de usuário, recuperação de wallpaper/temas sem reiniciar aplicações e guia de resgate via TTY.
+- 📦 **Perfis Declarativos de Instalação:** Instale exatamente o que precisa através dos perfis `minimal`, `hybrid` ou `complete` (todos integrando a Redshift Store e o UI Recovery).
 
 ---
 
@@ -224,6 +225,82 @@ O Redshift OS inclui a **Redshift Store**, uma central moderna de software desen
 
 ---
 
+## Redshift UI Recovery — Supervisão e Recuperação da Interface
+
+O Redshift OS introduz o utilitário **`redshift-ui-recover`**, uma solução completa e resiliente de diagnóstico, supervisão contínua e recuperação da interface gráfica (frontends Quickshell `end-4` e `caelestia-hybrid`, barra de tarefas, painéis e papéis de parede) sem afetar aplicações do usuário em execução (como navegadores, terminais ou editores de código).
+
+### Arquitetura de Recuperação em 4 Níveis
+
+1. **Nível 1 (Diagnóstico Não-Destrutivo e Respeito a Locks):**
+   - Valida a presença da sessão gráfica Hyprland. Se inativa (ex: sessão encerrada ou terminal puro), fornece orientação segura para TTY e encerra.
+   - Detecta bloqueio de tela (`hyprlock`) e suspende ações destrutivas para preservar a tela de bloqueio e senhas digitadas.
+   - Respeita transições ativas (`switch.lock`) acionadas pelo `ui-switch.sh`, evitando condições de corrida.
+   - Se o frontend ativo e o socket IPC estiverem saudáveis, nenhuma ação desnecessária é tomada (idempotência estrita).
+2. **Nível 2 (Recuperação de Wallpaper e Preservação de Cores):**
+   - Se apenas o papel de parede ou player de vídeo (`mpvpaper`/`video-bridge`) falhar ou for corrompido, executa a recuperação seletiva sem reiniciar a barra de tarefas e preservando integralmente os 49 tokens Material You e arquivos de tema (`colors.json`, `applied_scheme_type.txt`).
+3. **Nível 3 (Reinício Controlado do Frontend Ativo):**
+   - Se o frontend estiver ausente ou congelado (timeout de IPC > 1s), realiza o encerramento gracioso (`SIGTERM`), limpeza seletiva de PIDs zumbis do Quickshell e inicialização em nova sessão (`setsid`), validando a resposta do socket antes de liberar.
+4. **Nível 4 (Fallback de Segurança para end-4 e Backoff Anti-Loop):**
+   - Em caso de falhas consecutivas (3 ou mais crashes em 60 segundos) no frontend Caelestia, aciona o fallback automático para a interface base estável `end-4`.
+   - Se ambas as interfaces falharem consecutivamente, o supervisor ativa o **Backoff de Segurança**, suspendendo reinicializações em loop para evitar sobrecarga de CPU e alertando o usuário.
+
+### Atalhos de Teclado no Hyprland
+
+| Atalho | Ação Executada | Descrição |
+| :--- | :--- | :--- |
+| `SUPER + CTRL + SHIFT + B` | `redshift-ui-recover --soft` | **Recuperação de Emergência da Interface:** Restaura a barra de tarefas e papéis de parede sem fechar suas janelas e aplicações. |
+| `CTRL + SUPER + R` | `redshift-ui-recover --restart` | **Reinício Controlado do Frontend:** Força o reinício controlado da interface ativa com validação pós-startup. |
+| `SUPER + J` | IPC `quickshell:barToggle` | **Ocultar/Exibir Barra:** Alterna a visibilidade da barra de tarefas de forma limpa (não computado como falha). |
+
+### Menu de Aplicativos e Launcher
+
+O sistema disponibiliza a entrada de menu desktop **"Reiniciar Interface do Redshift OS"** (`redshift-ui-recover.desktop`):
+- Localizável no inicializador (`Fuzzel` / menu de aplicativos) sob a categoria **Sistema / Utilitários**.
+- Executa a recuperação não-destrutiva (`--soft`).
+- Oferece ações de clique direito:
+  - *Reiniciar Interface (Frontend Ativo)* (`--restart`).
+  - *Recuperação Completa (Hard Recovery)* (`--hard`).
+
+### Comandos de Linha de Comando (CLI)
+
+```bash
+# Exibir status detalhado de saúde de todos os componentes gráficos
+redshift-ui-recover --status
+
+# Verificação silenciosa de integridade (Exit: 0=OK, 1=Crítico, 2=Degradado/Aviso)
+redshift-ui-recover --check
+
+# Executar recuperação conservadora em 4 níveis (atalho SUPER + CTRL + SHIFT + B)
+redshift-ui-recover --soft
+
+# Reiniciar ordenadamente o frontend gráfico ativo
+redshift-ui-recover --restart
+
+# Recuperação completa forçada (frontend ativo + wallpaper + hyprctl reload)
+redshift-ui-recover --hard
+
+# Exibir as últimas linhas do histórico de diagnóstico e recuperação
+redshift-ui-recover --logs 50
+
+# Executar o supervisor contínuo (daemon watchdog)
+redshift-ui-recover --watchdog
+```
+
+### Serviço Watchdog do Systemd
+
+O serviço de usuário do systemd supervisiona ativamente a interface em segundo plano:
+- Arquivo de unidade: `~/.config/systemd/user/redshift-ui-watchdog.service`.
+- Inicia automaticamente na inicialização da sessão gráfica (`graphical-session.target`) configurado em `execs.lua`.
+- Opera a cada 5 segundos avaliando o IPC do Quickshell, respeitando bloqueios de tela (`hyprlock`), locks de transição (`switch.lock`) e aplicando cooldown de segurança caso atinja mais de 3 recuperações em 5 minutos.
+- Comandos de controle:
+  ```bash
+  systemctl --user status redshift-ui-watchdog.service  # Verificar status
+  systemctl --user restart redshift-ui-watchdog.service # Reiniciar serviço
+  systemctl --user stop redshift-ui-watchdog.service    # Parar temporariamente
+  ```
+
+---
+
 ## Backups e Recuperação Manual
 
 ### Backups Automáticos
@@ -239,20 +316,33 @@ O Redshift OS inclui a **Redshift Store**, uma central moderna de software desen
   ```
   *(Arquivos como `monitors.lua`, `workspaces.lua` e `general.lua` são sincronizados com `--ignore-existing` e permanecem 100% sob controle do usuário).*
 
-### Recuperação Manual
-Caso uma transição trave ou uma customização impeça o carregamento da interface gráfica:
-1. Abra um terminal virtual via `Ctrl + Alt + F3` (ou conecte-se via SSH).
-2. Force a restauração para o frontend base end-4:
+### Guia de Resgate e Recuperação via TTY
+Caso uma transição trave, o compositor fique sem resposta ou ocorra alguma degradação gráfica:
+1. Abra um terminal virtual via `Ctrl + Alt + F3` (ou `F4`, `F5`) ou conecte-se via SSH.
+2. Faça login com seu usuário.
+3. Utilize o utilitário oficial de recuperação do Redshift OS:
    ```bash
-   killall -9 quickshell qs mpvpaper 2>/dev/null
-   echo "end4" > ~/.local/state/quickshell/ui-switch/current
-   qs -c ii &
+   # Diagnosticar estado atual dos componentes
+   redshift-ui-recover --status
+
+   # Executar recuperação conservadora automatizada
+   redshift-ui-recover --soft
+
+   # Se necessário forçar reinício do frontend ativo
+   redshift-ui-recover --restart
+
+   # Forçar retorno seguro à interface end-4
+   ui-switch.sh end4
+
+   # Diagnóstico completo de componentes e pacotes
+   redshift-doctor --check ui
    ```
-3. Para restaurar um arquivo específico do backup gerado:
+4. Retorne à sessão gráfica do Hyprland via `Ctrl + Alt + F1` (ou `F2`).
+5. Para restaurar um arquivo específico do backup gerado pelo instalador:
    ```bash
    cp -r ~/ii-original-dots-backup/.config/<arquivo-desejado> ~/.config/
    ```
-4. Para consultar o log da última instalação e verificar passos executados:
+6. Para consultar o log da última instalação e verificar passos executados:
    ```bash
    cat ~/.local/state/illogical-impulse/logs/setup-*.log | tail -n 50
    ```

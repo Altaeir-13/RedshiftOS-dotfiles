@@ -89,7 +89,11 @@ install_file "dots/.local/share/icons/redshift-symbolic.svg" "${XDG_DATA_HOME}"/
 install_file "dots/.local/share/icons/redshift-symbolic-compact.svg" "${XDG_DATA_HOME}"/icons/redshift-symbolic-compact.svg
 install_file "dots/.local/share/icons/redshift-store.svg" "${XDG_DATA_HOME}"/icons/hicolor/scalable/apps/redshift-store.svg
 install_file "dots/.local/share/applications/redshift-store.desktop" "${XDG_DATA_HOME}"/applications/redshift-store.desktop
+install_file "dots/.local/share/applications/redshift-ui-recover.desktop" "${XDG_DATA_HOME}"/applications/redshift-ui-recover.desktop
+install_file "dots/.config/systemd/user/redshift-ui-watchdog.service" "${XDG_CONFIG_HOME}"/systemd/user/redshift-ui-watchdog.service
 install_dir__sync "dots/.local/share/redshift-os" "${XDG_DATA_HOME}"/redshift-os
 install_file "dots/.local/bin/rice-lock" "${XDG_BIN_HOME}"/rice-lock
 install_file "dots/.local/bin/redshift-store" "${XDG_BIN_HOME}"/redshift-store
 install_file "dots/.local/bin/redshift-doctor" "${XDG_BIN_HOME}"/redshift-doctor
+install_file "dots/.local/bin/redshift-ui-recover" "${XDG_BIN_HOME}"/redshift-ui-recover
+

@@ -293,9 +293,15 @@ resolve_hyprland_signature() {
 }
 
 check_hyprland_status() {
-    local sig
-    if ! sig="$(resolve_hyprland_signature)"; then
-        return 1
+    local sig runtime pid process
+    sig="$(resolve_hyprland_signature)" || return 1
+    runtime="$XDG_RUNTIME_DIR/hypr/$sig"
+    if [[ -S "$runtime/.socket.sock" ]] &&
+        read -r pid 2>/dev/null < "$runtime/hyprland.lock" &&
+        [[ "$pid" =~ ^[0-9]+$ ]]; then
+        read -r process 2>/dev/null < "/proc/$pid/comm" &&
+            [[ "$process" == Hyprland ]]
+        return
     fi
 
     HYPRLAND_INSTANCE_SIGNATURE="$sig" timeout 2 hyprctl version >/dev/null 2>&1

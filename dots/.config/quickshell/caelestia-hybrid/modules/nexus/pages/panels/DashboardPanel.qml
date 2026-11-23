@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Layouts
 import Caelestia.Config
 import Caelestia.I18n
+import qs.services
 import qs.modules.nexus.common
 
 PageBase {
@@ -29,6 +30,14 @@ PageBase {
             text: Tr.trCtx("Enabled", "toggle label")
             checked: Config.dashboard.enabled
             onToggled: GlobalConfig.dashboard.enabled = checked
+        }
+
+        ToggleRow {
+            text: Tr.tr("Show taskbar button")
+            subtext: Tr.tr("Display button on the taskbar to toggle the dashboard")
+            disabled: !Config.dashboard.enabled
+            checked: BarEntries.isEntryEnabled("dashboard")
+            onToggled: BarEntries.setEntryEnabled("dashboard", checked)
         }
 
         ToggleRow {

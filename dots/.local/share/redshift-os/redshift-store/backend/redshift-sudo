@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Redshift Store — Sudo Elevation Wrapper
+# =============================================================================
+# Garante autenticação de privilégios com sessão única (single-sign-on)
+# via timestamp caching nativo do sudo (/run/sudo/ts/) e do sudoloop do yay.
+# =============================================================================
+
+set -e
+
+SUDO_BIN="${REDSHIFT_REAL_SUDO_BIN:-/usr/bin/sudo}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_ASKPASS="${SCRIPT_DIR}/askpass.py"
+
+if [[ -z "${SUDO_ASKPASS:-}" && -f "$DEFAULT_ASKPASS" ]]; then
+    export SUDO_ASKPASS="$DEFAULT_ASKPASS"
+fi
+
+# 1. Se o sudo já possuir credenciais válidas em cache:
+if "$SUDO_BIN" -n true 2>/dev/null; then
+    exec "$SUDO_BIN" "$@"
+fi
+
+# 2. Se for a checagem -v inicial do yay para validação e início do loop:
+if [[ "$1" == "-v" ]]; then
+    exec "$SUDO_BIN" -A -v
+fi
+
+# 3. Executa o comando solicitado com elevação usando o askpass gráfico:
+exec "$SUDO_BIN" -A "$@"

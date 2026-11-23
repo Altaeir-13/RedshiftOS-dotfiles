@@ -317,6 +317,109 @@ def get_safe_pacman_conf() -> list[str]:
     return ["--config", conf]
 
 
+ASKPASS_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "askpass.sh")
+
+# Non-interactive policy for yay (user requested: no buttons, no terminal typing).
+#  - clean build of every package; PKGBUILD diffs are NOT shown/asked (the PKGBUILD can still be
+#    inspected in the package detail dialog before installing);
+#  - "Packages to exclude" is answered with None: never exclude anything (no partial upgrades);
+#  - --noconfirm answers pacman's "Proceed with installation?" with the default.
+YAY_NONINTERACTIVE_FLAGS = (
+    "--answerclean",
+    "All",
+    "--answerdiff",
+    "None",
+    "--answeredit",
+    "None",
+    "--answerupgrade",
+    "None",
+)
+
+
+def _user_can_sudo() -> bool:
+    """Heuristic: the user belongs to the wheel/sudo admin group."""
+    try:
+        import grp
+
+        gids = set(os.getgroups()) | {os.getgid()}
+        names = set()
+        for gid in gids:
+            try:
+                names.add(grp.getgrgid(gid).gr_name)
+            except KeyError:
+                continue
+        return bool(names & {"wheel", "sudo"})
+    except Exception:
+        return False
+
+
+def get_askpass_path() -> str | None:
+    """Return the graphical askpass helper path when it is usable, else None."""
+    path = ASKPASS_SCRIPT
+    if not (os.path.isfile(path) and os.access(path, os.X_OK)):
+        return None
+    if not SAFE_PATH_RE.match(path):
+        return None
+    return path
+
+
+def get_default_sudo_bin() -> str:
+    """Return path to redshift-sudo elevation wrapper if available, else system sudo."""
+    wrapper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "redshift-sudo")
+    if os.path.isfile(wrapper) and os.access(wrapper, os.X_OK):
+        return wrapper
+    return "/usr/bin/sudo"
+
+
+def resolve_privilege_backend() -> str:
+    """Choose how yay elevates privileges: 'sudo' (single password via askpass + credential cache) or 'pkexec'.
+
+    pkexec never caches credentials, so a yay run (sync + install) asks for the password several times.
+    sudo with redshift-sudo and --sudoloop asks once through a graphical dialog and keeps the credential
+    alive during long builds.
+
+    Override with REDSHIFT_PRIVILEGE_BACKEND=sudo|pkexec. An explicit REDSHIFT_PKEXEC_BIN keeps pkexec.
+    """
+    forced = os.environ.get("REDSHIFT_PRIVILEGE_BACKEND", "").strip().lower()
+    if forced == "pkexec":
+        return "pkexec"
+    if not forced and os.environ.get("REDSHIFT_PKEXEC_BIN", "").strip():
+        return "pkexec"
+
+    if get_askpass_path() is None:
+        return "pkexec"
+    sudo_bin = get_safe_bin("REDSHIFT_SUDO_BIN", get_default_sudo_bin())
+    if not (os.path.isfile(sudo_bin) and os.access(sudo_bin, os.X_OK)):
+        return "pkexec"
+    if forced == "sudo":
+        return "sudo"
+    if not _user_can_sudo():
+        return "pkexec"
+    return "sudo"
+
+
+def get_yay_privilege_args() -> list[str]:
+    """yay arguments selecting the privilege escalation method."""
+    if resolve_privilege_backend() == "sudo":
+        sudo_bin = get_safe_bin("REDSHIFT_SUDO_BIN", get_default_sudo_bin())
+        return ["--sudo", sudo_bin, "--sudoloop"]
+    pkexec_bin = get_safe_bin("REDSHIFT_PKEXEC_BIN", "/usr/bin/pkexec")
+    return ["--sudo", pkexec_bin]
+
+
+def get_privilege_env(cmd: Sequence[str]) -> dict[str, str]:
+    """Extra environment variables a command built by this module needs (SUDO_ASKPASS for sudo -A)."""
+    if "--sudo" in cmd:
+        sudo_idx = cmd.index("--sudo")
+        if sudo_idx + 1 < len(cmd):
+            sudo_target = cmd[sudo_idx + 1]
+            if "sudo" in os.path.basename(sudo_target):
+                askpass = get_askpass_path()
+                if askpass:
+                    return {"SUDO_ASKPASS": askpass}
+    return {}
+
+
 def build_safe_pacman_install_cmd(pkg_names: Sequence[str]) -> list[str]:
     """Build a safe command argv list for installing official packages via pacman.
 
@@ -380,8 +483,9 @@ def build_safe_pacman_sysupgrade_cmd() -> list[str]:
 def build_safe_yay_install_cmd(pkg_names: Sequence[str], euid: int | None = None) -> list[str]:
     """Build a safe command argv list for installing AUR packages via yay.
 
-    Guarantees non-root execution, validates package names, delegates final privilege
-    elevation to pkexec without interactive TTY sudo dependency, and appends '--'.
+    Guarantees non-root execution, validates package names, delegates privilege
+    elevation to sudo -A (graphical askpass, single password) or pkexec, runs fully non-interactive
+    (clean build, no diff review) and appends '--'.
 
     Args:
         pkg_names: Sequence of package names to install.
@@ -398,15 +502,12 @@ def build_safe_yay_install_cmd(pkg_names: Sequence[str], euid: int | None = None
         raise SecurityViolationError("Package list cannot be empty for AUR installation")
     validated = [ensure_valid_package_name(pkg) for pkg in pkg_names]
     yay_bin = get_safe_bin("REDSHIFT_YAY_BIN", "/usr/bin/yay")
-    pkexec_bin = get_safe_bin("REDSHIFT_PKEXEC_BIN", "/usr/bin/pkexec")
     return [
         yay_bin,
         "-S",
         "--needed",
-        "--sudo",
-        pkexec_bin,
-        "--cleanmenu",
-        "--diffmenu",
+        *get_yay_privilege_args(),
+        *YAY_NONINTERACTIVE_FLAGS,
         "--",
         *validated,
     ]
@@ -415,7 +516,8 @@ def build_safe_yay_install_cmd(pkg_names: Sequence[str], euid: int | None = None
 def build_safe_yay_sysupgrade_cmd(euid: int | None = None) -> list[str]:
     """Build safe command argv list for full system upgrade (official + AUR) via yay.
 
-    Delegates final elevation to pkexec without interactive TTY sudo dependency.
+    Fully non-interactive (clean build, no diff menus, nothing excluded); elevation via sudo -A with a
+    graphical askpass (one password) or pkexec as fallback.
 
     Args:
         euid: Optional EUID override for test isolation.
@@ -425,14 +527,11 @@ def build_safe_yay_sysupgrade_cmd(euid: int | None = None) -> list[str]:
     """
     ensure_non_root_for_aur(euid)
     yay_bin = get_safe_bin("REDSHIFT_YAY_BIN", "/usr/bin/yay")
-    pkexec_bin = get_safe_bin("REDSHIFT_PKEXEC_BIN", "/usr/bin/pkexec")
     return [
         yay_bin,
         "-Syu",
-        "--sudo",
-        pkexec_bin,
-        "--cleanmenu",
-        "--diffmenu",
+        *get_yay_privilege_args(),
+        *YAY_NONINTERACTIVE_FLAGS,
     ]
 
 

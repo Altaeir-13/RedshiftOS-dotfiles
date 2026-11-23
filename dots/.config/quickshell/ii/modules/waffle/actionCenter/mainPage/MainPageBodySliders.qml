@@ -55,6 +55,7 @@ ColumnLayout {
         WSlider {
             Layout.fillWidth: true
             value: Audio.sink.audio.volume
+            to: 1.5
             scrollable: true
             onMoved: {
                 Audio.sink.audio.volume = value;

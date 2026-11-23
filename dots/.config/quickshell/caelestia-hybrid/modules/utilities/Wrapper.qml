@@ -24,10 +24,7 @@ Item {
 
         reloadableId: "utilities"
     }
-    // Hybrid rice:
-    // Utilities agora vivem no Quick Controls da taskbar.
-    // O drawer lateral independente foi desabilitado.
-    readonly property bool shouldBeActive: false
+    readonly property bool shouldBeActive: screenState.utilities && Config.utilities.enabled
     readonly property real totalPadding: content.anchors.margins + CUtils.clamp(content.anchors.margins - Config.border.thickness, 0, content.anchors.margins)
     readonly property real nonAnimHeight: ((content.item as Content)?.nonAnimHeight ?? 0) + totalPadding
     property real offsetScale: shouldBeActive ? 0 : 1

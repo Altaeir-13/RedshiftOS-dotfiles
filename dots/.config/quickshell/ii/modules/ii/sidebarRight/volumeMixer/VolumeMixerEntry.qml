@@ -98,6 +98,7 @@ Item {
             StyledSlider {
                 id: slider
                 value: root.node?.audio.volume ?? 0
+                to: 1.5
                 onMoved: root.node.audio.volume = value
                 configuration: StyledSlider.Configuration.S
             }

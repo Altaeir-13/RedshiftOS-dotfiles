@@ -32,9 +32,7 @@ Scope {
             const next = !(v.launcher || v.dashboard || v.osd);
             v.launcher = v.dashboard = v.osd = next;
 
-            // Utilities foram incorporadas ao Quick Controls
-            // da taskbar.
-            v.utilities = false;
+            v.utilities = next;
         }
     }
 
@@ -104,13 +102,13 @@ Scope {
     CustomShortcut {
         // qmllint enable unresolved-type
         name: "utilities"
-        description: "Utilities moved to taskbar Quick controls"
+        description: "Toggle utilities"
 
         onPressed: {
-            // Mantemos o shortcut registrado por compatibilidade,
-            // mas o drawer lateral não existe mais.
+            if (root.hasFullscreen)
+                return;
             const screenState = ShellState.forActive();
-            screenState.utilities = false;
+            screenState.utilities = !screenState.utilities;
         }
     }
 

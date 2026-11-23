@@ -161,6 +161,43 @@ if hybrid_frontend() == "caelestia" then
         }
     )
 
+    -- ========================================================
+    -- CAELESTIA SIDEBAR & DASHBOARD & UTILITIES BINDS
+    -- ========================================================
+
+    pcall(function() hl.unbind("SUPER + N") end)
+    hl.bind(
+        "SUPER + N",
+        hl.dsp.exec_cmd(
+            "qs -c caelestia-hybrid ipc call drawers toggle sidebar"
+        ),
+        {
+            description = "HYBRID: Caelestia sidebar"
+        }
+    )
+
+    pcall(function() hl.unbind("SUPER + Tab") end)
+    hl.bind(
+        "SUPER + Tab",
+        hl.dsp.exec_cmd(
+            "qs -c caelestia-hybrid ipc call drawers toggle dashboard"
+        ),
+        {
+            description = "HYBRID: Caelestia dashboard"
+        }
+    )
+
+    pcall(function() hl.unbind("SUPER + U") end)
+    hl.bind(
+        "SUPER + U",
+        hl.dsp.exec_cmd(
+            "qs -c caelestia-hybrid ipc call drawers toggle utilities"
+        ),
+        {
+            description = "HYBRID: Caelestia utilities"
+        }
+    )
+
 
     -- ========================================================
     -- REMOVE END-4 BRIGHTNESS BINDS

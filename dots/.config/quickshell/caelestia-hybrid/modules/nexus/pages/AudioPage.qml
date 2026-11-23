@@ -26,6 +26,7 @@ PageBase {
             label: Tr.trCtx("Output", "audio output")
             valueLabel: Strings.percentOne(value)
             value: Audio.volume
+            to: GlobalConfig.services.maxVolume
             enabled: !Audio.muted
             onMoved: v => Audio.setVolume(v)
         }
@@ -53,6 +54,7 @@ PageBase {
             label: Tr.trCtx("Input", "audio input")
             valueLabel: Strings.percentOne(value)
             value: Audio.sourceVolume
+            to: GlobalConfig.services.maxVolume
             enabled: !Audio.sourceMuted
             onMoved: v => Audio.setSourceVolume(v)
         }

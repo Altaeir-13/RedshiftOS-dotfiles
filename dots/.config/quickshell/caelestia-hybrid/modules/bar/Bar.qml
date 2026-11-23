@@ -107,7 +107,24 @@ ColumnLayout {
         id: repeater
 
         model: ScriptModel {
-            values: root.Config.bar.entries.values.filter(e => e.enabled)
+            values: {
+                const baseEntries = root.Config.bar.entries.values.slice();
+                if (!baseEntries.some(e => e.id === "dashboard")) {
+                    const logoIdx = baseEntries.findIndex(e => e.id === "logo");
+                    baseEntries.splice(logoIdx >= 0 ? logoIdx + 1 : 0, 0, { id: "dashboard", enabled: true });
+                }
+                if (!baseEntries.some(e => e.id === "sidebar")) {
+                    const powerIdx = baseEntries.findIndex(e => e.id === "power");
+                    baseEntries.splice(powerIdx >= 0 ? powerIdx : baseEntries.length, 0, { id: "sidebar", enabled: true });
+                }
+                return baseEntries.filter(e => {
+                    if (!e.enabled) return false;
+                    if (e.id === "dashboard" && !root.Config.dashboard.enabled) return false;
+                    if (e.id === "sidebar" && !root.Config.sidebar.enabled) return false;
+                    if (e.id === "logo" && !root.Config.launcher.enabled) return false;
+                    return true;
+                });
+            }
         }
 
         DelegateChooser {
@@ -124,6 +141,16 @@ ColumnLayout {
                 delegate: EntryWrapper {
                     OsIcon {
                         objectName: "taskbarLogo"
+                        screenState: root.screenState
+                    }
+                }
+            }
+            DelegateChoice {
+                roleValue: "dashboard"
+                delegate: EntryWrapper {
+                    DashboardButton {
+                        objectName: "taskbarDashboardButton"
+                        screenState: root.screenState
                     }
                 }
             }
@@ -172,6 +199,15 @@ ColumnLayout {
                 }
             }
             DelegateChoice {
+                roleValue: "sidebar"
+                delegate: EntryWrapper {
+                    SidebarButton {
+                        objectName: "taskbarSidebarButton"
+                        screenState: root.screenState
+                    }
+                }
+            }
+            DelegateChoice {
                 roleValue: "power"
                 delegate: EntryWrapper {
                     Power {
@@ -184,6 +220,10 @@ ColumnLayout {
     }
 
     UiFrontendSwitchButton {
+        visible: {
+            const entry = root.Config.bar.entries.values.find(e => e.id === "uiSwitch");
+            return entry ? entry.enabled : true;
+        }
         Layout.alignment: Qt.AlignHCenter
         Layout.bottomMargin: root.vPadding
     }
@@ -200,6 +240,8 @@ ColumnLayout {
 
         implicitWidth: item?.implicitWidth ?? 0
         implicitHeight: item?.implicitHeight ?? 0
+        width: implicitWidth
+        height: implicitHeight
 
         children: item
     }

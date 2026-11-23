@@ -85,10 +85,10 @@ Singleton {
 
                 if (actionProc.requestedAction === "enable" && isNowOn) {
                     if (GlobalConfig.utilities.toasts.gameModeChanged)
-                        Toaster.toast(Tr.tr("Game mode enabled"), Tr.tr("Disabled Hyprland animations, blur, gaps and shadows"), "gamepad");
+                        Toaster.toast(Tr.tr("Game mode enabled"), Tr.tr("Disabled Hyprland animations, blur, gaps and shadows"), "sports_esports");
                 } else if (actionProc.requestedAction === "disable" && !isNowOn) {
                     if (GlobalConfig.utilities.toasts.gameModeChanged)
-                        Toaster.toast(Tr.tr("Game mode disabled"), Tr.tr("Hyprland settings restored"), "gamepad");
+                        Toaster.toast(Tr.tr("Game mode disabled"), Tr.tr("Hyprland settings restored"), "sports_esports");
                 }
             }
         }

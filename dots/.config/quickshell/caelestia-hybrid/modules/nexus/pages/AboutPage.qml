@@ -62,16 +62,17 @@ PageBase {
                 width: parent.width - Tokens.padding.largeIncreased * 2
                 spacing: Tokens.spacing.small
 
-                AnimatedLogo {
+                Logo {
                     Layout.alignment: Qt.AlignHCenter
-                    Layout.preferredWidth: implicitWidth
-                    Layout.preferredHeight: implicitHeight
+                    Layout.preferredWidth: 112
+                    Layout.preferredHeight: 112
+                    animated: true
                 }
 
                 StyledText {
                     Layout.alignment: Qt.AlignHCenter
                     Layout.topMargin: Tokens.spacing.small
-                    text: "Caelestia"
+                    text: SysInfo.osPrettyName || "Redshift OS"
                     font: Tokens.font.headline.builders.large.width(110).build()
                 }
 

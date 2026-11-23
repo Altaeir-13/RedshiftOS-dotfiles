@@ -6,6 +6,7 @@ OSDValue {
     id: root
     iconName: WIcons.volumeIcon
     value: Audio.sink?.audio.volume ?? 0
+    to: 1.5
 
     Connections {
         // Listen to volume changes

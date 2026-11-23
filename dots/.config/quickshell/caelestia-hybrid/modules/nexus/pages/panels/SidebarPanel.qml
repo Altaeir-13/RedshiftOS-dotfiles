@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Layouts
 import Caelestia.Config
 import Caelestia.I18n
+import qs.services
 import qs.modules.nexus.common
 
 PageBase {
@@ -28,6 +29,21 @@ PageBase {
             text: Tr.trCtx("Enabled", "toggle label")
             checked: Config.sidebar.enabled
             onToggled: GlobalConfig.sidebar.enabled = checked
+        }
+
+        ToggleRow {
+            text: Tr.tr("Show taskbar button")
+            subtext: Tr.tr("Display button on the taskbar to toggle the sidebar")
+            disabled: !Config.sidebar.enabled
+            checked: BarEntries.isEntryEnabled("sidebar")
+            onToggled: BarEntries.setEntryEnabled("sidebar", checked)
+        }
+
+        ToggleRow {
+            text: Tr.tr("Show on hover")
+            subtext: Tr.tr("Reveal when the cursor reaches the screen edge")
+            checked: Config.sidebar.showOnHover
+            onToggled: GlobalConfig.sidebar.showOnHover = checked
         }
 
         StepperRow {

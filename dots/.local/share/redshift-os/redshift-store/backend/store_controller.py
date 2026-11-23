@@ -89,6 +89,9 @@ class StoreController(QObject):
     maintenanceStatusChanged = pyqtSignal()
     isRepairingChanged = pyqtSignal()
     _updatesLoaded = pyqtSignal(list)
+    _postTxChecked = pyqtSignal(list, bool, str, str)
+    _catalogSearched = pyqtSignal(int, dict, bool)
+    _pkgbuildFetched = pyqtSignal(int, str)
     _indexReady = pyqtSignal()
 
     def __init__(
@@ -160,6 +163,11 @@ class StoreController(QObject):
 
         # Connect internal update signals
         self._updatesLoaded.connect(self._on_updates_loaded)
+        self._postTxChecked.connect(self._on_post_tx_checked)
+        self._catalogSearched.connect(self._on_catalog_searched)
+        self._pkgbuildFetched.connect(self._on_pkgbuild_fetched)
+        self._search_generation: int = 0
+        self._pkgbuild_generation: int = 0
         self._indexReady.connect(self._on_index_ready)
 
         # Connect TransactionService signals
@@ -526,22 +534,7 @@ class StoreController(QObject):
             return
 
         self._catalog_offset += self._catalog_page_size
-        res = self._catalog_service.search_catalog(
-            query=self._search_query,
-            source_filter=self._active_source_filter,
-            category_filter=self._active_category,
-            installed_filter=self._active_installed_filter,
-            apps_only=not self._include_system_packages,
-            sort_by=self._active_sort_by,
-            offset=self._catalog_offset,
-            limit=self._catalog_page_size,
-        )
-
-        self._can_load_more_catalog = res.get("has_more", False)
-        items = res.get("items", [])
-        if items:
-            self._catalog_model.append_items(items)
-            self.catalogChanged.emit()
+        self._run_catalog_query(append=True)
 
     @pyqtSlot(str)
     def exploreSection(self, section_id: str) -> None:
@@ -587,7 +580,13 @@ class StoreController(QObject):
 
     def _execute_catalog_search(self) -> None:
         """Internal helper to execute catalog search with active pagination and filters."""
-        res = self._catalog_service.search_catalog(
+        self._run_catalog_query(append=False)
+
+    def _run_catalog_query(self, append: bool) -> None:
+        """Run the catalog query; off the GUI thread when real (AUR RPC / disk) backends are in use."""
+        self._search_generation += 1
+        gen = self._search_generation
+        kwargs = dict(
             query=self._search_query,
             source_filter=self._active_source_filter,
             category_filter=self._active_category,
@@ -597,8 +596,38 @@ class StoreController(QObject):
             offset=self._catalog_offset,
             limit=self._catalog_page_size,
         )
+        if self._catalog_service.mock_mode:
+            self._apply_catalog_result(self._catalog_service.search_catalog(**kwargs), append)
+            return
 
+        if append:
+            # Prevent duplicate page loads while this one is in flight
+            self._can_load_more_catalog = False
+
+        def _worker() -> None:
+            try:
+                res = self._catalog_service.search_catalog(**kwargs)
+            except Exception as e:
+                logger.warning("Catalog search failed in background thread: %s", e)
+                res = {"items": [], "total": 0, "has_more": False, "status": "error", "message": str(e)}
+            self._catalogSearched.emit(gen, res, append)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_catalog_searched(self, gen: int, res: dict, append: bool) -> None:
+        """Apply a background search result unless a newer query superseded it."""
+        if gen != self._search_generation:
+            return
+        self._apply_catalog_result(res, append)
+
+    def _apply_catalog_result(self, res: dict, append: bool) -> None:
         items = res.get("items", [])
+        if append:
+            self._can_load_more_catalog = res.get("has_more", False)
+            if items:
+                self._catalog_model.append_items(items)
+                self.catalogChanged.emit()
+            return
         self._catalog_model.set_items(items)
         self._catalog_total_count = res.get("total", 0)
         self._can_load_more_catalog = res.get("has_more", False)
@@ -677,6 +706,7 @@ class StoreController(QObject):
         if self._selected_package.get("source") == "aur":
             self.fetchPkgbuildPreview(clean)
         else:
+            self._pkgbuild_generation += 1
             self._pkgbuild_preview = ""
             self.pkgbuildPreviewChanged.emit()
 
@@ -839,8 +869,26 @@ class StoreController(QObject):
         clean_name = pkg_name.strip()
         if not clean_name:
             return
-        preview = self._catalog_service.fetch_aur_pkgbuild(clean_name)
-        self._pkgbuild_preview = preview
+        self._pkgbuild_generation += 1
+        gen = self._pkgbuild_generation
+        if self._catalog_service.mock_mode:
+            self._on_pkgbuild_fetched(gen, self._catalog_service.fetch_aur_pkgbuild(clean_name))
+            return
+
+        def _worker() -> None:
+            try:
+                text = self._catalog_service.fetch_aur_pkgbuild(clean_name)
+            except Exception as e:
+                logger.warning("PKGBUILD fetch failed for %s: %s", clean_name, e)
+                text = f"# Não foi possível obter o PKGBUILD de {clean_name}: {e}"
+            self._pkgbuildFetched.emit(gen, text)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_pkgbuild_fetched(self, gen: int, text: str) -> None:
+        if gen != self._pkgbuild_generation:
+            return
+        self._pkgbuild_preview = text
         self.pkgbuildPreviewChanged.emit()
 
     @pyqtSlot(str, result=bool)
@@ -931,12 +979,33 @@ class StoreController(QObject):
 
     def _on_tx_finished(self, success: bool, action: str, message: str) -> None:
         """Handle transaction completion: post-verify updates, notify user, and refresh models."""
+        if action in ("update_all", "update") and not self._catalog_service.mock_mode:
+            # checkupdates + `yay -Qua` hit the network (up to ~30s): never run them on the GUI thread.
+            def _worker() -> None:
+                try:
+                    remaining = self._catalog_service.check_updates()
+                except Exception as e:
+                    logger.warning("Post-transaction update check failed: %s", e)
+                    remaining = []
+                self._postTxChecked.emit(remaining, success, action, message)
+
+            threading.Thread(target=_worker, daemon=True).start()
+            return
+        remaining = self._catalog_service.check_updates() if action in ("update_all", "update") else []
+        self._finish_tx(success, action, message, remaining)
+
+    def _on_post_tx_checked(self, remaining: list, success: bool, action: str, message: str) -> None:
+        """Main-thread continuation of _on_tx_finished once the pending-updates scan completed."""
+        self._checking_updates = False
+        self._finish_tx(success, action, message, remaining)
+
+    def _finish_tx(self, success: bool, action: str, message: str, remaining_updates: list) -> None:
+        """Compute the verified outcome, notify the user and refresh the models."""
         toast_level = "success" if success else "error"
         toast_message = message
 
         # Post-verification and outcome computation for update operations
         if action in ("update_all", "update"):
-            remaining_updates = self._catalog_service.check_updates()
             self._updates_model.set_items(remaining_updates)
 
             if not success or getattr(self._tx_service, "last_outcome", "") == "unchanged" or self._tx_service.state == "unchanged":

@@ -214,6 +214,10 @@ EOF
 #!/usr/bin/env bash
 STATE_DIR="${MOCK_STATE_DIR:?}"
 echo "hyprctl $*" >> "$STATE_DIR/hyprctl.log"
+if [[ "${1:-}" == version && -f "$STATE_DIR/hyprland_starting" ]]; then
+    rm -f "$STATE_DIR/hyprland_starting"
+    exit 1
+fi
 if [[ "${MOCK_HYPRLAND_DEAD:-0}" == "1" ]] || [[ -f "$STATE_DIR/hyprland_dead" ]]; then
     exit 1
 fi
@@ -2603,7 +2607,7 @@ EOF
 
     "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --session-start || exit 3
     grep -Fq 'systemctl --user import-environment WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE' "$MOCK_STATE_DIR/systemctl.log" || exit 4
-    grep -Fxq 'systemctl --user start redshift-ui-watchdog.service' "$MOCK_STATE_DIR/systemctl.log" || exit 5
+    grep -Fxq 'systemctl --user restart redshift-ui-watchdog.service' "$MOCK_STATE_DIR/systemctl.log" || exit 5
 ) && pass "Cenário K: Inicialização após logout/login — Singleton garantido, sem duplicação de processos watchdog" \
   || fail "Cenário K: Inicialização após logout/login — Falha no tratamento de concorrência ou reinicialização"
 
@@ -2726,7 +2730,7 @@ EOF
 ) && pass "Cenário O: Compositor Hyprland inativo — Detecção de término, orientação para TTY e encerramento seguro" \
   || fail "Cenário O: Compositor Hyprland inativo — Comportamento inadequado sem compositor"
 
-# O daemon identifica IPC congelado mesmo com a instância presente na lista.
+# O daemon aguarda o compositor e identifica IPC congelado com a instância presente na lista.
 (
     sb="$(create_sandbox "guard-daemon")"
     export PATH="$sb/bin:$PATH" MOCK_STATE_DIR="$sb/mock-state" HOME="$sb/home"
@@ -2735,16 +2739,17 @@ EOF
     export HYPRLAND_INSTANCE_SIGNATURE=guard_daemon_test
     mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/illogical-impulse"
     printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
-    touch "$MOCK_STATE_DIR/qs_ii_running" "$MOCK_STATE_DIR/qs_ipc_fail" "$sb/wall.png"
+    touch "$MOCK_STATE_DIR/qs_ii_running" "$MOCK_STATE_DIR/qs_ipc_fail" \
+        "$MOCK_STATE_DIR/hyprland_starting" "$sb/wall.png"
     printf '{"background":{"wallpaperPath":"%s"}}\n' "$sb/wall.png" > "$XDG_CONFIG_HOME/illogical-impulse/config.json"
     recover="${REPO_ROOT}/dots/.local/bin/redshift-ui-recover"
     "$recover" --watchdog &
     watchdog=$!
     trap 'kill "$watchdog" 2>/dev/null || true; wait "$watchdog" 2>/dev/null || true' EXIT
-    for _ in {1..30}; do
+    for _ in {1..50}; do
         if grep -q "reiniciado e IPC responsivo" "$XDG_STATE_HOME/redshift-os/ui-recovery.log" 2>/dev/null; then
             grep -Fxq 'qs -c ii ipc show' "$MOCK_STATE_DIR/commands.log" || exit 1
-            [[ ! -e "$MOCK_STATE_DIR/qs_ipc_fail" ]] || exit 2
+            [[ ! -e "$MOCK_STATE_DIR/qs_ipc_fail" && ! -e "$MOCK_STATE_DIR/hyprland_starting" ]] || exit 2
             exit 0
         fi
         sleep 0.1

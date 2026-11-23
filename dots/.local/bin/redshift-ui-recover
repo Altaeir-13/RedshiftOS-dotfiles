@@ -537,6 +537,11 @@ with_switch_lock() (
     "$@"
 )
 
+frontend_pids() {
+    session_instances | awk -v path="$XDG_CONFIG_HOME/quickshell/$1/shell.qml" \
+        '$1 ~ /^[0-9]+$/ && substr($0, length($1)+2) == path {print $1}'
+}
+
 stop_frontend() {
     local frontend="$1" config=ii running=running_end4
     if [[ "$frontend" == caelestia ]]; then
@@ -545,14 +550,23 @@ stop_frontend() {
     fi
     timeout -k 1 2 qs kill -c "$config" >/dev/null 2>&1 || true
     sleep "$RECOVERY_GRACE_SLEEP"
-    if "$running"; then
-        # Quickshell can select an instance by PID even if its QML IPC is frozen.
-        local pid
+    if [[ -n "${WAYLAND_DISPLAY:-}" ]] && "$running"; then
+        local pid executable
+        executable="$(command -v qs)"
+        # Retry by PID for this display and configuration before escalating.
         while read -r pid; do
             timeout -k 1 2 qs kill --pid "$pid" >/dev/null 2>&1 || true
-        done < <(session_instances |
-            awk -v suffix="/quickshell/$config/shell.qml"                 '$1 ~ /^[0-9]+$/ && substr($0, length($0)-length(suffix)+1) == suffix {print $1}')
+        done < <(frontend_pids "$config")
         sleep "$RECOVERY_CLEANUP_SLEEP"
+        if "$running" && ! is_screen_locked; then
+            while read -r pid; do
+                if [[ -O "/proc/$pid" && "/proc/$pid/exe" -ef "$executable" ]]; then
+                    log WARN "Quickshell '$frontend' (PID $pid) não encerrou. Enviando SIGKILL."
+                    kill -KILL "$pid" 2>/dev/null || true
+                fi
+            done < <(frontend_pids "$config")
+            sleep "$RECOVERY_CLEANUP_SLEEP"
+        fi
     fi
     if "$running"; then
         log ERROR "Instância de '$frontend' ainda ativa. Reinício interrompido para evitar duplicatas."
@@ -572,8 +586,8 @@ restart_active_frontend() {
         setsid -f qs -c ii 7>&- 9>&- >"$END4_LOG" 2>&1 || return 1
     fi
 
-    local attempt deadline=$((SECONDS + 8))
-    for ((attempt=0; attempt<40 && SECONDS<deadline; attempt++)); do
+    local attempt deadline=$((SECONDS + 20))
+    for ((attempt=0; attempt<100 && SECONDS<deadline; attempt++)); do
         if [[ "$(get_running_frontend)" == "$frontend" ]] &&
             test_quickshell_ipc "$frontend" >/dev/null; then
             timeout 3 hyprctl reload >/dev/null 2>&1 || true
@@ -600,7 +614,8 @@ fallback_frontend() {
         (( $(count_crashes_in_window "$candidate" 300) < 3 )); then
         log FALLBACK "Tentando alternar de '$failed' para '$candidate'."
         record_recovery_event
-        if "$UI_SWITCH_SCRIPT" "$candidate" --guard-fallback 7>&- &&
+        if stop_frontend "$failed" &&
+            "$UI_SWITCH_SCRIPT" "$candidate" --guard-fallback 7>&- &&
             [[ "$(get_running_frontend)" == "$candidate" ]] &&
             test_quickshell_ipc "$candidate" >/dev/null; then
             log OK "Frontend alternativo '$candidate' validado."
@@ -898,8 +913,22 @@ cmd_watchdog() {
     }
     trap cleanup_watchdog SIGINT SIGTERM
 
-    local next_update=0 update_pid=
-    while check_hyprland_status; do
+    local next_update=0 update_pid= failed_probes=0 sig
+    sig="$(resolve_hyprland_signature)" || {
+        log WATCHDOG "Sessão Hyprland ausente. Encerrando watchdog."
+        return 0
+    }
+    export HYPRLAND_INSTANCE_SIGNATURE="$sig"
+    while true; do
+        if ! check_hyprland_status; then
+            failed_probes=$((failed_probes + 1))
+            # Hyprland can emit the start event before its command socket responds.
+            # Retry a bounded number of times through startup or a temporary stall.
+            (( failed_probes < 6 )) || break
+            sleep 2
+            continue
+        fi
+        failed_probes=0
         if [[ -x "$XDG_BIN_HOME/redshift-guard" ]] && (( SECONDS >= next_update )) &&
             { [[ -z "$update_pid" ]] || ! kill -0 "$update_pid" 2>/dev/null; }; then
             "$XDG_BIN_HOME/redshift-guard" --monitor 7>&- &
@@ -917,7 +946,7 @@ cmd_watchdog() {
 cmd_session_start() {
     export XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_BIN_HOME
     if systemctl --user import-environment WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE         XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_BIN_HOME &&
-        systemctl --user start redshift-ui-watchdog.service; then
+        systemctl --user restart redshift-ui-watchdog.service; then
         return 0
     fi
     cmd_watchdog

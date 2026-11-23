@@ -132,12 +132,16 @@ STATE_DIR="${MOCK_STATE_DIR:?}"
 echo "qs $*" >> "$STATE_DIR/commands.log"
 
 case "${1:-}" in
-    list)
-        if [[ "${MOCK_QS_IPC_FAIL:-0}" == "1" ]] || [[ -f "$STATE_DIR/qs_ipc_fail" ]]; then
-            exit 1
+    --private-check-compat)
+        if [[ -f "$STATE_DIR/qt_incompatible" ]]; then
+            echo 'WARNING: Qt version mismatch' >&2
+            exit 2
         fi
+        exit 0
+        ;;
+    list)
         if [[ -f "$STATE_DIR/qs_ii_running" ]]; then
-            echo "Config path: /mock/.config/quickshell/ii/shell.qml"
+            printf "Instance end4:\n  Config path: /mock/.config/quickshell/ii/shell.qml\n"
         fi
         if [[ -f "$STATE_DIR/qs_cael_running" ]]; then
             if [[ "${MOCK_CAEL_CRASH_ON_SECOND_CHECK:-0}" == "1" ]]; then
@@ -149,7 +153,7 @@ case "${1:-}" in
                     exit 0
                 fi
             fi
-            echo "Config path: /mock/.config/quickshell/caelestia-hybrid/shell.qml"
+            printf "Instance caelestia:\n  Config path: /mock/.config/quickshell/caelestia-hybrid/shell.qml\n"
         fi
         exit 0
         ;;
@@ -168,6 +172,13 @@ case "${1:-}" in
             echo "qs_ipc $cfg $*" >> "$STATE_DIR/ipc.log"
             if [[ "${MOCK_QS_IPC_FAIL:-0}" == "1" ]] || [[ -f "$STATE_DIR/qs_ipc_fail" ]]; then
                 exit 1
+            fi
+            if [[ "${2:-}" == show ]]; then
+                case "$cfg" in
+                    ii) [[ -f "$STATE_DIR/qs_ii_running" ]] ;;
+                    caelestia-hybrid) [[ -f "$STATE_DIR/qs_cael_running" ]] ;;
+                esac
+                exit $?
             fi
             exit 0
         fi
@@ -300,12 +311,31 @@ EOF
 STATE_DIR="${MOCK_STATE_DIR:-/tmp}"
 echo "pacman $*" >> "$STATE_DIR/commands.log"
 case "${1:-}" in
-    -Qq) exit 1 ;;
+    -Qq) [[ -f "$STATE_DIR/installed-guard-packages" ]] ;;
+    -Qlq) [[ "${2:-}" == libcava ]] && echo /usr/lib/libcava.so ;;
+    -Q) [[ ! -f "$STATE_DIR/packages" ]] || cat "$STATE_DIR/packages" ;;
     -Qeq) echo ""; exit 0 ;;
     -S|-Syu|-R) exit 0 ;;
     *) exit 0 ;;
 esac
 MOCK_PACMAN
+
+    cat > "$sb/bin/ldd" <<'MOCK_LDD'
+#!/usr/bin/env bash
+if [[ "${2:-}" == */libcava.so && -f "${MOCK_STATE_DIR:?}/sndio_missing" ]]; then
+    echo 'libsndio.so.7 => not found'
+fi
+exit 0
+MOCK_LDD
+
+    cat > "$sb/bin/checkupdates" <<'MOCK_CHECKUPDATES'
+#!/usr/bin/env bash
+if [[ -f "${MOCK_STATE_DIR:?}/pending-updates" ]]; then
+    cat "$MOCK_STATE_DIR/pending-updates"
+else
+    exit 2
+fi
+MOCK_CHECKUPDATES
 
     # Mock `yay`
     cat > "$sb/bin/yay" <<'MOCK_YAY'
@@ -612,6 +642,8 @@ XDG_CACHE_HOME="$sb_exp/home/.cache" \
 XDG_BIN_HOME="$sb_exp/home/.local/bin" \
 ./setup install-files -p hybrid --exp-files -f >/dev/null
 
+assert_file_exists "$sb_exp/home/.local/bin/redshift-guard" "Modo --exp-files instala Redshift Guard"
+assert_file_exists "$sb_exp/home/.config/systemd/user/redshift-ui-watchdog.service" "Modo --exp-files instala serviço watchdog"
 assert_file_exists "$sb_exp/home/.config/hypr/monitors.lua" "Modo --exp-files preserva ~/.config/hypr/monitors.lua sem exclusão"
 assert_file_exists "$sb_exp/home/.config/quickshell/caelestia-hybrid/shell.qml" "Modo --exp-files instala caelestia-hybrid no perfil hybrid"
 assert_file_exists "$sb_exp/home/.config/hypr/hyprlock/status.sh" "Modo --exp-files sincroniza hypr/hyprlock"
@@ -1929,71 +1961,85 @@ EOF
 ) && pass "Cenário F: Caelestia inicia e encerra imediatamente — Rollback restaura end-4 com integridade" \
   || fail "Cenário F: Caelestia inicia e encerra imediatamente — Rollback falhou"
 
-# Cenário G — Atualização de Qt/Quickshell: O sistema deve detectar a necessidade de nova verificação
+# Cenário G — Monitora versões instaladas e detecta incompatibilidade após transação.
 (
-    sb_g="$(create_sandbox "scen-g")"
-    export PATH="$sb_g/bin:$PATH"
-    export MOCK_STATE_DIR="$sb_g/mock-state"
-    export HOME="$sb_g/home"
-    export XDG_CONFIG_HOME="$sb_g/home/.config"
-    export XDG_DATA_HOME="$sb_g/home/.local/share"
-    export XDG_STATE_HOME="$sb_g/home/.local/state"
-    export XDG_CACHE_HOME="$sb_g/home/.cache"
-    export XDG_BIN_HOME="$sb_g/home/.local/bin"
-
-    hook_file="${REPO_ROOT}/sdata/dist-arch/redshift-doctor-check.hook"
-    [[ -f "$hook_file" ]] || exit 1
-    grep -q "Target = qt6-base" "$hook_file" || exit 2
-    grep -q "Target = quickshell" "$hook_file" || exit 3
-    grep -q "PostTransaction" "$hook_file" || exit 4
-
-    touch /tmp/.redshift-needs-doctor
-
-    mkdir -p "$XDG_CONFIG_HOME/quickshell/ii" "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid"
-    touch "$XDG_CONFIG_HOME/quickshell/ii/shell.qml" "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/shell.qml"
+    sb_g="$(create_sandbox "guard-updates")"
+    export PATH="$sb_g/bin:$PATH" MOCK_STATE_DIR="$sb_g/mock-state" HOME="$sb_g/home"
+    export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
+    export XDG_STATE_HOME="$HOME/.local/state" XDG_BIN_HOME="$HOME/.local/bin"
     export CAELESTIA_QML_PATH="$sb_g/qml"
+    guard="${REPO_ROOT}/dots/.local/bin/redshift-guard"
+    doctor="${REPO_ROOT}/dots/.local/bin/redshift-doctor"
+    pkg="${REPO_ROOT}/sdata/dist-arch/illogical-impulse-quickshell-git"
+    hook="$pkg/redshift-doctor-check.hook"
+    grep -Fxq 'Target = qt6-*' "$hook" || exit 1
+    grep -Fxq 'Target = sndio' "$hook" || exit 1
+    grep -Fxq 'When = PostTransaction' "$hook" || exit 1
+    grep -Fq "$(sha256sum "$hook" | cut -d ' ' -f 1)" "$pkg/PKGBUILD" || exit 1
 
-    doc_exit=0
-    doc_out="$("${REPO_ROOT}/dots/.local/bin/redshift-doctor" --check packages 2>&1)" || doc_exit=$?
+    mkdir -p "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid" "$XDG_BIN_HOME"
+    touch "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/shell.qml"
+    cp "$guard" "$XDG_BIN_HOME/"
+    printf 'qt6-base 6.10-1\nlibcava 1.0-1\nsndio 7-1\n' > "$MOCK_STATE_DIR/packages"
+    printf 'qt6-base 6.10-1 -> 6.11-1\n' > "$MOCK_STATE_DIR/pending-updates"
+    "$guard" --monitor > /dev/null || exit 2
+    "$doctor" --check guard --json | jq -e '.status == "ok" and (.checks[0].message | contains("6.11-1"))' || exit 3
 
-    rm -f /tmp/.redshift-needs-doctor
+    printf 'qt6-base 6.11-1\nlibcava 1.0-1\nsndio 8-1\n' > "$MOCK_STATE_DIR/packages"
+    touch "$MOCK_STATE_DIR/qt_incompatible" "$MOCK_STATE_DIR/sndio_missing"
+    "$guard" --monitor > /dev/null || exit 4
+    doc_rc=0
+    result="$("$doctor" --check guard --json)" || doc_rc=$?
+    [[ "$doc_rc" -eq 1 ]] || exit 5
+    jq -e '.status == "error" and (.checks[0].message | contains("libsndio.so.7") and contains("Qt version mismatch"))' <<< "$result" || exit 6
+    first="$(cat "$XDG_STATE_HOME/redshift-os/guard-fingerprint")"
+    "$guard" --monitor > /dev/null || exit 7
+    [[ "$(cat "$XDG_STATE_HOME/redshift-os/guard-fingerprint")" == "$first" ]] || exit 8
+    [[ "$(grep -c 'Incompatibilidade de runtime' "$MOCK_STATE_DIR/notify.log")" == 1 ]] || exit 9
+) && pass "Guard: monitora atualizações e diagnostica Qt e sndio/libcava via Doctor JSON" \
+  || fail "Guard: falha no monitoramento ou diagnóstico de ABI"
 
-    [[ "$doc_exit" -eq 2 ]] || exit 5
-    echo "$doc_out" | grep -qi "Atualização Recente" || exit 6
-) && pass "Cenário G: Atualização de Qt/Quickshell — Marcador detectado e aviso emitido" \
-  || fail "Cenário G: Atualização de Qt/Quickshell — Falha na detecção do marcador"
-
-# Cenário H — Reparo concluído: O Redshift Doctor deve confirmar que o problema foi corrigido
+# Cenário H — Doctor delega a compilação às receitas instaladas e só instala após compilar.
 (
-    sb_h="$(create_sandbox "scen-h")"
-    export PATH="$sb_h/bin:$PATH"
-    export MOCK_STATE_DIR="$sb_h/mock-state"
-    export HOME="$sb_h/home"
-    export XDG_CONFIG_HOME="$sb_h/home/.config"
-    export XDG_DATA_HOME="$sb_h/home/.local/share"
-    export XDG_STATE_HOME="$sb_h/home/.local/state"
-    export XDG_CACHE_HOME="$sb_h/home/.cache"
-    export XDG_BIN_HOME="$sb_h/home/.local/bin"
-    unset CAELESTIA_QML_PATH CAELESTIA_QML_ONLY
-
-    mkdir -p "$XDG_CONFIG_HOME/quickshell/ii" "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid"
-    touch "$XDG_CONFIG_HOME/quickshell/ii/shell.qml" "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/shell.qml"
-
-    mkdir -p "$HOME/.local/lib/qt6/qml/M3Shapes"
-    touch "$HOME/.local/lib/qt6/qml/M3Shapes/qmldir"
-
-    touch /tmp/.redshift-needs-doctor
-    rm -rf "$HOME/.local/lib/qt6/qml/Caelestia"
-
-    "${REPO_ROOT}/dots/.local/bin/redshift-doctor" --repair caelestia -y >/dev/null || exit 1
-
-    [[ ! -f /tmp/.redshift-needs-doctor ]] || exit 2
-    [[ -f "$HOME/.local/lib/qt6/qml/Caelestia/qmldir" ]] || exit 3
-    [[ -f "$HOME/.local/lib/qt6/qml/Caelestia/I18n/Tr.qml" ]] || exit 4
-
-    "${REPO_ROOT}/dots/.local/bin/redshift-doctor" --check caelestia >/dev/null || exit 5
-) && pass "Cenário H: Reparo concluído — Redshift Doctor restaura ambiente e confirma sucesso" \
-  || fail "Cenário H: Reparo concluído — Falha no procedimento de reparo"
+    sb_h="$(create_sandbox "guard-rebuild")"
+    export PATH="$sb_h/bin:$PATH" MOCK_STATE_DIR="$sb_h/mock-state" HOME="$sb_h/home"
+    export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
+    export XDG_STATE_HOME="$HOME/.local/state" XDG_BIN_HOME="$HOME/.local/bin"
+    export CAELESTIA_QML_PATH="$sb_h/qml"
+    mkdir -p "$XDG_BIN_HOME" "$XDG_DATA_HOME/redshift-guard/pkgs"
+    cp "${REPO_ROOT}/dots/.local/bin/redshift-guard" "$XDG_BIN_HOME/"
+    for package in illogical-impulse-quickshell-git illogical-impulse-caelestia-plugin; do
+        mkdir -p "$XDG_DATA_HOME/redshift-guard/pkgs/$package"
+        cp "${REPO_ROOT}/sdata/dist-arch/$package/PKGBUILD" "$XDG_DATA_HOME/redshift-guard/pkgs/$package/"
+    done
+    touch "$MOCK_STATE_DIR/installed-guard-packages"
+    cat > "$sb_h/bin/makepkg" <<'EOF'
+#!/bin/bash
+archive="$PWD/package.pkg.tar.zst"
+printf 'makepkg %s %s\n' "${PWD##*/}" "$*" >> "$MOCK_STATE_DIR/rebuild.log"
+if [[ "$1" == --packagelist ]]; then
+    printf '%s\n' "$archive"
+elif [[ "$PWD" == */illogical-impulse-caelestia-plugin && -f "$MOCK_STATE_DIR/build_failure" ]]; then
+    exit 1
+else
+    touch "$archive"
+fi
+EOF
+    cat > "$sb_h/bin/sudo" <<'EOF'
+#!/bin/bash
+printf 'sudo %s\n' "$*" >> "$MOCK_STATE_DIR/rebuild.log"
+EOF
+    chmod +x "$sb_h/bin/"{sudo,makepkg}
+    doctor="${REPO_ROOT}/dots/.local/bin/redshift-doctor"
+    touch "$MOCK_STATE_DIR/build_failure"
+    if "$doctor" --repair guard --yes >/dev/null 2>&1; then exit 1; fi
+    if grep -q '^sudo ' "$MOCK_STATE_DIR/rebuild.log"; then exit 2; fi
+    rm "$MOCK_STATE_DIR/build_failure"
+    "$doctor" --repair guard --yes >/dev/null || exit 3
+    grep -Eq '^sudo pacman -U -- .*/illogical-impulse-quickshell-git/.* .*/illogical-impulse-caelestia-plugin/' "$MOCK_STATE_DIR/rebuild.log" || exit 4
+    [[ ! -d "$HOME/.local/lib/qt6/qml/Caelestia" ]] || exit 5
+) && pass "Guard: recompilação assistida em duas etapas e transação única após sucesso" \
+  || fail "Guard: falha na recompilação assistida"
 
 # Cenário I — Instalação limpa: O perfil hybrid deve disponibilizar end-4 e Caelestia funcionais
 (
@@ -2012,6 +2058,10 @@ EOF
 
     "$iso_i/setup" install-files -p hybrid -f --skip-allgreeting >/dev/null
 
+    assert_file_exists "$XDG_BIN_HOME/redshift-guard" "Guard instalado em XDG_BIN_HOME"
+    [[ -x "$XDG_BIN_HOME/redshift-guard" ]] || exit 6
+    [[ -r "$XDG_DATA_HOME/redshift-guard/pkgs/illogical-impulse-quickshell-git/redshift-doctor-check.hook" ]] || exit 7
+    [[ "$(cat "$XDG_STATE_HOME/redshift-os/frontend-policy")" == hybrid ]] || exit 8
     assert_file_exists "$XDG_BIN_HOME/redshift-doctor" "redshift-doctor instalado em XDG_BIN_HOME"
     [[ -x "$XDG_BIN_HOME/redshift-doctor" ]] || exit 1
     assert_file_exists "$XDG_BIN_HOME/ui-switch.sh" "ui-switch.sh instalado em XDG_BIN_HOME"
@@ -2149,10 +2199,10 @@ fi
 )
 
 # 4. Suíte sintética de testes de recuperação de wallpaper (11 cenários)
-if "${REPO_ROOT}/tests/test_recover_wallpaper.sh" >/dev/null 2>&1; then
+if wallpaper_result="$("${REPO_ROOT}/tests/test_recover_wallpaper.sh" 2>&1)"; then
     pass "Suíte de testes sintéticos de recuperação de wallpaper e preservação de temas (11 cenários) aprovada"
 else
-    fail "Suíte de testes sintéticos de recuperação de wallpaper e preservação de temas falhou"
+    fail "Suíte de testes sintéticos de recuperação de wallpaper e preservação de temas falhou" "$wallpaper_result"
 fi
 
 # 5. Cenários Comportamentais de UI Recovery (Cenários A a O)
@@ -2334,7 +2384,7 @@ EOF
     : > "$MOCK_STATE_DIR/commands.log"
     "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 3
 
-    if grep -qE "kill|-c ii|-c caelestia" "$MOCK_STATE_DIR/commands.log"; then
+    if grep -qE "^qs (kill|-c (ii|caelestia-hybrid)$)" "$MOCK_STATE_DIR/commands.log"; then
         exit 4
     fi
 
@@ -2551,7 +2601,9 @@ EOF
     flock -u 7 2>/dev/null || true
     exec 7>&-
 
-    grep -q 'redshift-ui-watchdog.service' "${REPO_ROOT}/dots/.config/hypr/hyprland/execs.lua" || exit 3
+    "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --session-start || exit 3
+    grep -Fq 'systemctl --user import-environment WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE' "$MOCK_STATE_DIR/systemctl.log" || exit 4
+    grep -Fxq 'systemctl --user start redshift-ui-watchdog.service' "$MOCK_STATE_DIR/systemctl.log" || exit 5
 ) && pass "Cenário K: Inicialização após logout/login — Singleton garantido, sem duplicação de processos watchdog" \
   || fail "Cenário K: Inicialização após logout/login — Falha no tratamento de concorrência ou reinicialização"
 
@@ -2576,7 +2628,7 @@ EOF
     : > "$MOCK_STATE_DIR/commands.log"
     "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 1
 
-    if grep -qE "kill|-c ii|-c caelestia" "$MOCK_STATE_DIR/commands.log"; then
+    if grep -qE "^qs (kill|-c (ii|caelestia-hybrid)$)" "$MOCK_STATE_DIR/commands.log"; then
         exit 2
     fi
 
@@ -2610,7 +2662,7 @@ EOF
     "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 2
     "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --soft >/dev/null 2>&1 || exit 3
 
-    if grep -qE "kill|-c ii|-c caelestia" "$MOCK_STATE_DIR/commands.log"; then
+    if grep -qE "^qs (kill|-c (ii|caelestia-hybrid)$)" "$MOCK_STATE_DIR/commands.log"; then
         exit 4
     fi
 ) && pass "Cenário M: Execução repetida em ambiente íntegro — Totalmente idempotente e zero ações destrutivas" \
@@ -2673,6 +2725,65 @@ EOF
     timeout 5 "${REPO_ROOT}/dots/.local/bin/redshift-ui-recover" --watchdog >/dev/null 2>&1 || exit 4
 ) && pass "Cenário O: Compositor Hyprland inativo — Detecção de término, orientação para TTY e encerramento seguro" \
   || fail "Cenário O: Compositor Hyprland inativo — Comportamento inadequado sem compositor"
+
+# O daemon identifica IPC congelado mesmo com a instância presente na lista.
+(
+    sb="$(create_sandbox "guard-daemon")"
+    export PATH="$sb/bin:$PATH" MOCK_STATE_DIR="$sb/mock-state" HOME="$sb/home"
+    export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
+    export XDG_STATE_HOME="$HOME/.local/state" XDG_BIN_HOME="$HOME/.local/bin"
+    export HYPRLAND_INSTANCE_SIGNATURE=guard_daemon_test
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/illogical-impulse"
+    printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    touch "$MOCK_STATE_DIR/qs_ii_running" "$MOCK_STATE_DIR/qs_ipc_fail" "$sb/wall.png"
+    printf '{"background":{"wallpaperPath":"%s"}}\n' "$sb/wall.png" > "$XDG_CONFIG_HOME/illogical-impulse/config.json"
+    recover="${REPO_ROOT}/dots/.local/bin/redshift-ui-recover"
+    "$recover" --watchdog &
+    watchdog=$!
+    trap 'kill "$watchdog" 2>/dev/null || true; wait "$watchdog" 2>/dev/null || true' EXIT
+    for _ in {1..30}; do
+        if grep -q "reiniciado e IPC responsivo" "$XDG_STATE_HOME/redshift-os/ui-recovery.log" 2>/dev/null; then
+            grep -Fxq 'qs -c ii ipc show' "$MOCK_STATE_DIR/commands.log" || exit 1
+            [[ ! -e "$MOCK_STATE_DIR/qs_ipc_fail" ]] || exit 2
+            exit 0
+        fi
+        sleep 0.1
+    done
+    exit 3
+) && pass "Guard: watchdog recupera IPC congelado com instância ainda presente" \
+  || fail "Guard: watchdog deixou passar congelamento de IPC"
+
+# O Guard pode alternar do end-4 para Caelestia e preserva o perfil minimal.
+(
+    sb="$(create_sandbox "guard-reverse-fallback")"
+    export PATH="$sb/bin:$PATH" MOCK_STATE_DIR="$sb/mock-state" HOME="$sb/home"
+    export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
+    export XDG_STATE_HOME="$HOME/.local/state" XDG_BIN_HOME="$HOME/.local/bin"
+    export CAELESTIA_QML_PATH="$sb/qml" HYPRLAND_INSTANCE_SIGNATURE=guard_fallback_test
+    recover="${REPO_ROOT}/dots/.local/bin/redshift-ui-recover"
+    mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_STATE_HOME/redshift-os" \
+        "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/scripts"
+    cp "${REPO_ROOT}/dots/.config/quickshell/ui-switch.sh" "$XDG_CONFIG_HOME/quickshell/"
+    touch "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/shell.qml"
+    printf '#!/bin/bash\nexit 0\n' > "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/scripts/end4-theme-bridge.sh"
+    chmod +x "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/scripts/end4-theme-bridge.sh"
+    printf 'end4\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    now="$(date +%s)"
+    file="$XDG_STATE_HOME/redshift-os/ui-recovery-state.json"
+    jq -n --argjson now "$now" '{recent_crashes: [range(3) | {frontend:"end4", timestamp:$now}]}' > "$file"
+
+    printf 'end4\n' > "$XDG_STATE_HOME/redshift-os/frontend-policy"
+    if "$recover" --soft; then exit 1; fi
+    jq -e '.backoff_active' "$file" >/dev/null || exit 2
+    if [[ -e "$MOCK_STATE_DIR/qs_cael_running" ]]; then exit 3; fi
+
+    printf 'hybrid\n' > "$XDG_STATE_HOME/redshift-os/frontend-policy"
+    jq '.backoff_active = false' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+    "$recover" --soft || exit 4
+    [[ "$(cat "$XDG_STATE_HOME/quickshell/ui-switch/current")" == caelestia ]] || exit 5
+    jq -e '(.recent_crashes | length) == 3' "$file" >/dev/null || exit 6
+) && pass "Guard: fallback para Caelestia respeita o perfil e mantém o histórico de tentativas" \
+  || fail "Guard: falha no fallback de end-4 ou no isolamento do perfil minimal"
 
 # 6. Diagnóstico de UI no Redshift Doctor
 (

@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'feature/**'
+      - 'feat/**'
   pull_request:
     branches:
       - main
@@ -40,7 +41,7 @@ jobs:
               fail=1
             fi
           done < <(find . -name "*.sh" -not -path "./.git/*" -print0)
-          for f in setup diagnose dots/.local/bin/rice-lock sdata/subcmd-virtmon/hypr_mon_guard; do
+          for f in setup diagnose dots/.local/bin/{rice-lock,redshift-guard,redshift-doctor,redshift-ui-recover} sdata/subcmd-virtmon/hypr_mon_guard sdata/dist-arch/*/PKGBUILD; do
             count=$((count + 1))
             bash -n "$f" || { echo "::error file=$f::bash -n failed"; fail=1; }
           done

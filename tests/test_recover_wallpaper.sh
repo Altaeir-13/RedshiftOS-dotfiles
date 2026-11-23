@@ -45,6 +45,19 @@ export XDG_CONFIG_HOME="$HOME/.config"
 export XDG_STATE_HOME="$HOME/.local/state"
 export XDG_DATA_HOME="$HOME/.local/share"
 export XDG_CACHE_HOME="$HOME/.cache"
+export XDG_RUNTIME_DIR="$TMP_ROOT/runtime"
+unset HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY
+
+# Keep host compositor and wallpaper processes out of the fixtures.
+mkdir -p "$TMP_ROOT/bin" "$XDG_RUNTIME_DIR"
+for command in pgrep hyprctl qs; do
+    printf '#!/bin/bash\nexit 1\n' > "$TMP_ROOT/bin/$command"
+done
+for command in pkill mpvpaper; do
+    printf '#!/bin/bash\nexit 0\n' > "$TMP_ROOT/bin/$command"
+done
+chmod +x "$TMP_ROOT/bin/"*
+export PATH="$TMP_ROOT/bin:$PATH"
 
 mkdir -p "$XDG_CONFIG_HOME/illogical-impulse"
 mkdir -p "$XDG_CONFIG_HOME/caelestia"

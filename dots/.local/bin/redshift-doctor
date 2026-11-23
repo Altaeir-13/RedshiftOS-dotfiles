@@ -64,10 +64,10 @@ record() {
             ;;
     esac
 
-    local esc_cat="${category//\"/\\\"}"
-    local esc_name="${name//\"/\\\"}"
-    local esc_msg="${message//\"/\\\"}"
-    JSON_RESULTS+=("{\"status\":\"$status\",\"category\":\"$esc_cat\",\"name\":\"$esc_name\",\"message\":\"$esc_msg\"}")
+    if [[ "$OUTPUT_JSON" == true ]]; then
+        JSON_RESULTS+=("$(jq -cn --arg status "$status" --arg category "$category" \
+            --arg name "$name" --arg message "$message" '{$status, $category, $name, $message}')")
+    fi
 }
 
 show_help() {
@@ -76,9 +76,9 @@ Uso: redshift-doctor [OPÇÕES] [COMANDO] [ALVO]
 
 Comandos CLI:
   --check [ALVO]       Executa verificações de integridade (padrão: all).
-                       Alvos suportados: all, ui, caelestia, quickshell, packages, hyprland, store
+                       Alvos suportados: all, guard, ui, caelestia, quickshell, packages, hyprland, store
   --report             Gera relatório detalhado do ambiente e componentes.
-  --repair caelestia   Executa reparo controlado do plugin/módulo Caelestia.
+  --repair [ALVO]      Recompila os pacotes oficiais do Redshift (caelestia, quickshell ou guard).
                        Exige confirmação interativa ou flag -y/--yes.
 
 Opções:
@@ -208,11 +208,11 @@ check_caelestia_plugin() {
     if [[ -n "$ldd_bin" ]]; then
         for so in "${so_files[@]}"; do
             local ldd_out
-            ldd_out="$("$ldd_bin" -r "$so" 2>&1 || true)"
-            if echo "$ldd_out" | grep -qi "undefined symbol"; then
+            ldd_out="$(timeout 10 "$ldd_bin" -r "$so" 2>&1 || true)"
+            if echo "$ldd_out" | grep -qiE "undefined symbol|not found"; then
                 has_undefined=true
                 local undef_summary
-                undef_summary="$(echo "$ldd_out" | grep -i "undefined symbol" | head -n 2 | sed 's/^[ \t]*//' | tr '\n' ' ')"
+                undef_summary="$(echo "$ldd_out" | grep -iE "undefined symbol|not found" | head -n 2 | sed 's/^[ \t]*//' | tr '\n' ' ')"
                 record ERROR "qt6_compat" "Compatibilidade Qt6 (${so##*/})" "Símbolos indefinidos detectados via ldd -r: $undef_summary"
             fi
         done
@@ -258,7 +258,7 @@ check_quickshell() {
     local active_frontend="inativo"
     if command -v qs >/dev/null 2>&1; then
         local list_out
-        list_out="$(qs list --all 2>/dev/null || true)"
+        list_out="$(timeout 2 qs list --all 2>/dev/null || true)"
         if echo "$list_out" | grep -Fq "/quickshell/caelestia-hybrid/shell.qml"; then
             active_frontend="caelestia"
         elif echo "$list_out" | grep -Fq "/quickshell/ii/shell.qml"; then
@@ -352,6 +352,11 @@ check_packages() {
         "ffmpeg"
     )
 
+    if [[ "$TARGET" != caelestia &&
+          "$(cat "$XDG_STATE_HOME/redshift-os/frontend-policy" 2>/dev/null)" == end4 ]]; then
+        required_pkgs=(qt6-base qt6-declarative)
+    fi
+    local pkg
     for pkg in "${required_pkgs[@]}"; do
         if pacman -Q "$pkg" >/dev/null 2>&1; then
             local pinfo
@@ -385,16 +390,23 @@ check_packages() {
     done
 }
 
-# Check post-update marker
-check_update_markers() {
-    local m1="/tmp/.redshift-needs-doctor"
-    local m2="${XDG_STATE_HOME}/redshift-os/needs-health-check"
-
-    if [[ -f "$m1" ]] || [[ -f "$m2" ]]; then
-        record WARN "updates" "Atualização Recente do Sistema" "Marcador de transação recente detectado (Qt/Quickshell atualizados). Execute reparo ou verificação completa se notar instabilidades."
-    else
-        record OK "updates" "Marcador de Atualização" "Nenhuma transação crítica pendente de verificação"
+check_guard() {
+    local output rc=0
+    local guard="$XDG_BIN_HOME/redshift-guard"
+    if [[ ! -x "$guard" ]]; then
+        record WARN guard "Redshift Guard 2.0" "Execute o instalador oficial para instalar o Guard."
+        return
     fi
+    if [[ "${1:-}" == caelestia ]]; then
+        output="$("$guard" --abi caelestia 2>&1)" || rc=$?
+    else
+        output="$("$guard" --status 2>&1)" || rc=$?
+    fi
+    case "$rc" in
+        0) record OK guard "Redshift Guard 2.0" "$output" ;;
+        2) record WARN guard "Redshift Guard 2.0" "$output" ;;
+        *) record ERROR guard "Redshift Guard 2.0" "$output" ;;
+    esac
 }
 
 # Check frontend switching readiness
@@ -605,10 +617,10 @@ check_ui_recovery() {
     local running_end4=false
     local running_cael=false
     if command -v qs >/dev/null 2>&1; then
-        if qs list --all 2>/dev/null | grep -Fq "/quickshell/ii/shell.qml"; then
+        if timeout 2 qs list --all 2>/dev/null | grep -Fq "/quickshell/ii/shell.qml"; then
             running_end4=true
         fi
-        if qs list --all 2>/dev/null | grep -Fq "/quickshell/caelestia-hybrid/shell.qml"; then
+        if timeout 2 qs list --all 2>/dev/null | grep -Fq "/quickshell/caelestia-hybrid/shell.qml"; then
             running_cael=true
         fi
     fi
@@ -727,143 +739,6 @@ except Exception:
 }
 
 # Repair action for Caelestia
-repair_caelestia() {
-    printf "%b\n" "${CLR_BOLD}=== Ação de Recuperação: Reparo do Caelestia ===${CLR_RESET}"
-
-    if [[ "$AUTO_CONFIRM" != "true" ]]; then
-        if [[ -t 0 ]]; then
-            printf "Deseja prosseguir com o reparo do Caelestia? [y/N]: "
-            local ans
-            read -r ans
-            case "$ans" in
-                [yY]|[yY][eE][sS]) ;;
-                *)
-                    echo "Operação de reparo cancelada pelo usuário."
-                    exit 0
-                    ;;
-            esac
-        else
-            echo "Aviso: Ambiente não interativo detectado sem flag -y/--yes. Abortando reparo."
-            exit 2
-        fi
-    fi
-
-    echo "Iniciando reparo dos componentes Caelestia..."
-
-    # Check if a custom repair command/hook is supplied
-    if [[ -n "${REDSHIFT_DOCTOR_REPAIR_CMD:-}" ]]; then
-        echo "Executando comando customizado de reparo..."
-        eval "$REDSHIFT_DOCTOR_REPAIR_CMD"
-    else
-        # Determine target user directory for QML modules
-        local user_qml_dir="${XDG_DATA_HOME}/quickshell/qml/Caelestia"
-        if [[ ! -w "/usr/lib/qt6/qml" ]]; then
-            user_qml_dir="$HOME/.local/lib/qt6/qml/Caelestia"
-        fi
-
-        mkdir -p "$user_qml_dir/I18n"
-
-        # If makepkg and PKGBUILD exist in repo, we can offer to build, or restore essential user layout
-        local pkgbuild_dir="sdata/dist-arch/illogical-impulse-caelestia-plugin"
-        if [[ -d "$pkgbuild_dir" ]] && command -v makepkg >/dev/null 2>&1 && [[ -w "/tmp" ]]; then
-            echo "PKGBUILD oficial localizado em $pkgbuild_dir."
-        fi
-
-        # Restore / ensure base QML module structure if missing
-        if [[ ! -f "$user_qml_dir/qmldir" ]]; then
-            cat << 'EOF' > "$user_qml_dir/qmldir"
-module Caelestia
-plugin CaelestiaPlugin
-classname CaelestiaPlugin
-typeinfo plugins.qmltypes
-prefer ://qt/qml/Caelestia/
-Tr 1.0 I18n/Tr.qml
-Units 1.0 I18n/Units.qml
-EOF
-            echo "qmldir restaurado em $user_qml_dir/qmldir."
-        fi
-
-        if [[ ! -f "$user_qml_dir/I18n/Tr.qml" ]]; then
-            cat << 'EOF' > "$user_qml_dir/I18n/Tr.qml"
-pragma Singleton
-import QtQuick
-QtObject {
-    function tr(key, fallback) { return fallback !== undefined ? fallback : key; }
-}
-EOF
-            echo "Tr.qml restaurado em $user_qml_dir/I18n/Tr.qml."
-        fi
-
-        if [[ ! -f "$user_qml_dir/I18n/Units.qml" ]]; then
-            cat << 'EOF' > "$user_qml_dir/I18n/Units.qml"
-pragma Singleton
-import QtQuick
-QtObject {
-    readonly property real dp: 1.0
-    readonly property real sp: 1.0
-}
-EOF
-            echo "Units.qml restaurado em $user_qml_dir/I18n/Units.qml."
-        fi
-
-        # Ensure dummy or compiled shared library exists for user-mode fallback if missing
-        if ! find "$user_qml_dir" -type f -name "*.so*" | grep -q .; then
-            # If a system library exists somewhere, copy it; otherwise touch/compile minimal stub
-            local sys_so
-            sys_so="$(find /usr/lib/qt6/qml/Caelestia "$HOME" -name "libCaelestiaPlugin.so" 2>/dev/null | head -n 1 || true)"
-            if [[ -n "$sys_so" ]] && [[ -f "$sys_so" ]]; then
-                cp -f "$sys_so" "$user_qml_dir/"
-                echo "Biblioteca compartilhada restaurada a partir de $sys_so."
-            elif command -v gcc >/dev/null 2>&1; then
-                # Compile a stub shared library to satisfy dlopen/runtime check in user-space
-                local stub_c
-                stub_c="$(mktemp --suffix=.c)"
-                echo 'void init_caelestia(void) {}' > "$stub_c"
-                gcc -shared -fPIC -o "$user_qml_dir/libCaelestiaPlugin.so" "$stub_c" 2>/dev/null || true
-                rm -f "$stub_c"
-                echo "Biblioteca compartilhada de usuário gerada em $user_qml_dir/libCaelestiaPlugin.so."
-            fi
-
-            if ! find "$user_qml_dir" -type f -name "*.so*" | grep -q .; then
-                touch "$user_qml_dir/libCaelestiaPlugin.so"
-            fi
-        fi
-        # Ensure default shell.json configuration exists if missing
-        local cael_json="$XDG_CONFIG_HOME/caelestia/shell.json"
-        if [[ ! -f "$cael_json" ]]; then
-            mkdir -p "$(dirname "$cael_json")"
-            echo '{}' > "$cael_json"
-        fi
-    fi
-
-    # Clean update notification markers
-    rm -f /tmp/.redshift-needs-doctor
-    rm -f "${XDG_STATE_HOME}/redshift-os/needs-health-check"
-
-    printf "%b Reparo do Caelestia concluído com sucesso.\n" "$CLR_OK"
-
-    # Re-run check to verify
-    echo
-    echo "Executando verificação de integridade pós-reparo..."
-    COUNT_OK=0
-    COUNT_WARN=0
-    COUNT_ERROR=0
-    JSON_RESULTS=()
-    OUTPUT_JSON=false
-    TARGET="caelestia"
-    check_caelestia_frontend
-    check_caelestia_plugin
-    check_update_markers
-
-    if [[ "$COUNT_ERROR" -eq 0 ]]; then
-        printf "%b Confirmação: Caelestia totalmente funcional e operacional.\n" "$CLR_OK"
-        exit 0
-    else
-        printf "%b Aviso: Ainda restam inconsistências após a tentativa de reparo.\n" "$CLR_WARN"
-        exit 1
-    fi
-}
-
 # Parse Command Line Arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -902,7 +777,7 @@ while [[ $# -gt 0 ]]; do
             show_help
             exit 0
             ;;
-        caelestia|quickshell|packages|hyprland|store|ui|all)
+        caelestia|quickshell|packages|hyprland|store|ui|guard|all)
             TARGET="$1"
             shift
             ;;
@@ -915,12 +790,19 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$MODE" == "repair" ]]; then
-    if [[ "$TARGET" != "caelestia" ]]; then
-        echo "Ação de reparo suportada atualmente apenas para 'caelestia'." >&2
-        exit 2
+    case "$TARGET" in
+        guard) TARGET=all ;;
+        quickshell|caelestia) ;;
+        *) echo "Ações de reparo disponíveis: guard, quickshell, caelestia." >&2; exit 2 ;;
+    esac
+    if [[ ! -x "$XDG_BIN_HOME/redshift-guard" ]]; then
+        echo "Instale o Redshift Guard pelo instalador oficial antes de reparar." >&2
+        exit 1
     fi
-    repair_caelestia
-    exit 0
+    if [[ "$AUTO_CONFIRM" == true ]]; then
+        exec "$XDG_BIN_HOME/redshift-guard" --rebuild "$TARGET" --yes
+    fi
+    exec "$XDG_BIN_HOME/redshift-guard" --rebuild "$TARGET"
 fi
 
 if [[ "$OUTPUT_JSON" != "true" ]]; then
@@ -935,7 +817,7 @@ case "$TARGET" in
         check_caelestia_plugin
         check_m3shapes
         check_packages
-        check_update_markers
+        check_guard caelestia
         ;;
     quickshell)
         check_quickshell
@@ -945,7 +827,7 @@ case "$TARGET" in
         ;;
     packages)
         check_packages
-        check_update_markers
+        check_guard
         ;;
     hyprland)
         check_hyprland
@@ -953,15 +835,20 @@ case "$TARGET" in
     store)
         check_store_and_sync
         ;;
+    guard)
+        check_guard
+        ;;
     ui)
         check_ui_recovery
         ;;
     all|*)
-        check_update_markers
+        check_guard
         check_end4
-        check_caelestia_frontend
-        check_caelestia_plugin
-        check_m3shapes
+        if [[ "$(cat "$XDG_STATE_HOME/redshift-os/frontend-policy" 2>/dev/null)" != end4 ]]; then
+            check_caelestia_frontend
+            check_caelestia_plugin
+            check_m3shapes
+        fi
         check_quickshell
         check_scripts
         check_packages

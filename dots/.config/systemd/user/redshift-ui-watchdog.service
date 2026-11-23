@@ -1,13 +1,11 @@
 [Unit]
-Description=Redshift OS UI Recovery Watchdog
+Description=Redshift Guard 2.0 UI watchdog
 PartOf=graphical-session.target
-After=graphical-session.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/redshift-ui-recover --watchdog
+ExecStart=/usr/bin/bash -c 'exec "$${XDG_BIN_HOME:-$$HOME/.local/bin}/redshift-ui-recover" --watchdog'
 Restart=on-failure
 RestartSec=5s
-
-[Install]
-WantedBy=graphical-session.target

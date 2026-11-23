@@ -109,7 +109,13 @@ function deletion_prompt(){
   done
 }
 
+if command -v systemctl >/dev/null; then
+  systemctl --user stop redshift-ui-watchdog.service 2>/dev/null || true
+fi
 deletion_prompt "${INSTALLED_LISTFILE}"
+if command -v systemctl >/dev/null; then
+  systemctl --user daemon-reload 2>/dev/null || true
+fi
 
 empty_dir_listfile=$(mktemp)
 scan_paths=(${XDG_CONFIG_HOME} "${XDG_DATA_HOME}"/konsole)

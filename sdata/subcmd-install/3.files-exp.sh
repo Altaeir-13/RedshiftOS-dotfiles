@@ -111,6 +111,8 @@ should_process_pattern() {
     dots/.config/fontconfig|dots-extra/fontsets/*)
       [[ "${SKIP_FONTCONFIG:-false}" == "true" ]] && return 1
       ;;
+    dots/.config/systemd/user/redshift-ui-watchdog.service)
+      ;;
     dots/.config/*|dots/.local/share/konsole)
       [[ "${SKIP_MISCCONF:-false}" == "true" ]] && return 1
       ;;

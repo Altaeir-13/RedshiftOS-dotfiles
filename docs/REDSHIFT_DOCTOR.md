@@ -1,94 +1,59 @@
-# Redshift Doctor & Sistema de Resiliência do Redshift OS
+# Redshift Doctor e Redshift Guard 2.0
 
-O **Redshift Doctor** (`redshift-doctor`) é o utilitário oficial de diagnóstico, auditoria de integridade e auto-recuperação do Redshift OS. Ele foi concebido para proteger o ambiente gráfico, detectar descompassos de ABI decorrentes de atualizações do Arch Linux (Qt6 e Quickshell) e fornecer mecanismos determinísticos de reparo sem exigir intervenção manual ou riscos de quebra de sessão.
+O Guard reúne a supervisão da interface do Hyprland, o monitoramento do runtime Arch e a recompilação assistida. O Doctor consulta o Guard e disponibiliza os diagnósticos em texto e JSON.
 
----
+## Instalação e sessão
 
-## 1. Arquitetura e Contrato de Execução
+`./setup install` instala as dependências e copia o Guard, o Doctor, os atalhos, o serviço de usuário e as receitas de recompilação para seus diretórios XDG. O passo de arquivos, em ambos os modos de cópia, valida a instalação e o ABI. Nos perfis híbridos, o instalador também executa a verificação de prontidão do Caelestia já existente. Se uma incompatibilidade for encontrada, o instalador informa o aviso de runtime e o diagnóstico correspondente.
 
-### Princípios de Design
-- **Read-Only por Padrão:** Os comandos de checagem (`--check`, `--report`, `--json`) nunca alteram arquivos, nunca modificam pacotes e **não requerem privilégios de root (`sudo`)**.
-- **Códigos de Saída Semânticos:**
-  - `0`: Sistema íntegro (OK).
-  - `1`: Erro crítico ou incompatibilidade identificada (ERROR).
-  - `2`: Alerta não-bloqueante ou manutenção necessária (WARN).
-- **Formatação Dual:** Apresenta saída visual limpa com tags ANSI coloridas (`[OK]`, `[WARN]`, `[ERROR]`) no terminal interativo e formato JSON estruturado com `--json` para integração com a **Redshift Store** e automações.
-- **Auto-Recuperação Controlada (`--repair`):** Ações de modificação (recompilação, reparo em espaço de usuário, reinstalação de pacotes) exigem confirmação explícita do usuário (`[s/N]`), com suporte a `-y`/`--yes` para automações headless.
+O Hyprland inicia `redshift-ui-watchdog.service` com as variáveis da sessão Wayland. Em ambientes sem um gerenciador systemd de usuário acessível, inicia o watchdog diretamente. O perfil `minimal` e instalações com `--skip-caelestia` usam end-4. Os perfis `hybrid` e `complete` habilitam os dois frontends.
 
----
+## Recuperação
 
-## 2. Comandos CLI Suportados
+O watchdog testa o IPC do frontend mesmo quando o processo ainda aparece na lista do Quickshell. O reinício e o UI Switch usam o mesmo lock, inclusive durante a validação do processo novo. O Guard mantém as janelas do usuário e pausa a recuperação quando detecta `hyprlock` ou o estado bloqueado no logind.
+
+Após três falhas do frontend em 60 segundos, o Guard tenta o outro frontend disponível. Com o limite de tentativas em cinco minutos atingido, aguarda a janela avançar. Se o frontend alternativo estiver indisponível ou falhar, pausa a recuperação automática. Um reinício manual ou uma troca bem-sucedida no UI Switch permite retomar as tentativas.
+
+- **Super + Ctrl + Shift + B** executa a recuperação conservadora e verifica o papel de parede.
+- **Ctrl + Super + R** solicita o reinício do frontend e permite nova tentativa após uma pausa.
+- Ambos são atalhos do Hyprland e continuam disponíveis quando o Quickshell encerra.
 
 ```bash
-# Diagnóstico completo de todos os subsistemas
-redshift-doctor --check
-
-# Diagnósticos focados em componentes específicos
-redshift-doctor --check caelestia    # Frontend Caelestia, plugin nativo e compatibilidade Qt6
-redshift-doctor --check quickshell   # Binário quickshell, estado de execução e IPC
-redshift-doctor --check packages     # Metapacotes, pacman e bibliotecas compartilhadas
-
-# Relatórios estruturados
-redshift-doctor --report             # Relatório legível completo
-redshift-doctor --json               # Relatório estruturado em formato JSON (parseável via jq)
-
-# Recuperação assistida
-redshift-doctor --repair caelestia   # Reparo interativo guiado do plugin nativo Caelestia
+redshift-ui-recover --status
+redshift-ui-recover --check
+redshift-ui-recover --logs 50
+journalctl --user -u redshift-ui-watchdog.service -b
 ```
 
----
+Os logs de recuperação e inicialização do frontend ficam em `${XDG_STATE_HOME:-$HOME/.local/state}/redshift-os/`. O serviço encerra quando o Hyprland deixa de responder.
 
-## 3. Verificação em Três Níveis no `ui-switch.sh`
+## Atualizações e ABI
 
-O script de alternância de frontends (`ui-switch.sh`) implementa um protocolo rigoroso de verificação em 3 níveis antes de transicionar a interface:
+O pacote `illogical-impulse-quickshell-git` instala `redshift-doctor-check.hook` em `/usr/share/libalpm/hooks` e depende de `pacman-contrib`. Em transações envolvendo Qt, Quickshell, Caelestia e bibliotecas selecionadas, o hook atualiza `/var/lib/redshift-guard/pacman-transaction` após o fim da transação. Cada sessão compara o marcador e as versões instaladas com seu último diagnóstico. Assim, uma verificação continua pendente mesmo que a atualização ocorra fora da sessão gráfica.
 
-1. **Nível 1 — Instalação:**
-   - Valida a presença e permissão de leitura de `Caelestia/qmldir` e bibliotecas nativas `.so` (`libcaelestia-coreplugin.so` ou `lib/libcaelestia-core.so`).
-   - Busca nos caminhos padrão do Qt6 (`/usr/lib/qt6/qml`, `/usr/local/lib/qt6/qml`), caminhos de usuário (`$HOME/.local/lib/qt6/qml`, `$XDG_DATA_HOME/quickshell/qml`) ou override via `$CAELESTIA_QML_PATH`.
-   - Mensagem de falha acionável: *"Instalação incompleta ou ausente: plugin nativo Caelestia não encontrado. Execute 'redshift-doctor --check caelestia'."*
+O Guard verifica a compatibilidade Qt do Quickshell e usa `ldd -r` para identificar bibliotecas ausentes e símbolos não resolvidos no Quickshell, nas bibliotecas nativas do Caelestia e na libcava. Isso detecta, por exemplo, quando a libcava ainda exige uma versão de sndio que o sistema atualizou. O UI Switch faz a verificação antes de iniciar Caelestia e confirma o IPC antes de concluir a troca.
 
-2. **Nível 2 — Compatibilidade:**
-   - Executa inspeção dinâmica rápida via `ldd -r` nas bibliotecas nativas encontradas para detectar símbolos não resolvidos (`undefined symbol`) ou bibliotecas dinâmicas ausentes (`not found`) após upgrades do Qt6.
-   - Mensagem de falha acionável: *"Incompatibilidade detectada entre Caelestia e Qt6/Quickshell. Execute 'redshift-doctor --repair caelestia'."*
+A cada seis horas de consulta bem-sucedida, o Guard usa `checkupdates` com uma base temporária separada para listar atualizações dos repositórios configurados no Pacman. Em caso de falha da consulta, registra o erro e aguarda 15 minutos antes de repetir. As últimas verificações e a lista de atualizações ficam no estado XDG do usuário.
 
-3. **Nível 3 — Operacionalidade e Rollback Seguro:**
-   - Inicia o processo com os caminhos corretos exportados em `QML_IMPORT_PATH` e `QML2_IMPORT_PATH`.
-   - Monitora a estabilidade do processo após o startup (`UI_SWITCH_STABILITY_SLEEP`) para capturar eventuais falhas logo após `Configuration Loaded`.
-   - Em caso de falha de inicialização ou recusa de reload do Hyprland, aciona automaticamente `restore_end4`, restaurando a interface `end-4` e notificando o usuário. **O usuário nunca fica sem ambiente gráfico.**
+```bash
+redshift-doctor --check guard
+redshift-doctor --check guard --json
+redshift-doctor --check ui
+redshift-doctor --check caelestia
+```
 
----
+O Doctor retorna `0` quando os componentes verificados estão íntegros, `1` para erro e `2` para aviso ou manutenção pendente.
 
-## 4. Prevenção de Regressões Pós-Atualização (Hook do Pacman)
+## Recompilação assistida
 
-O Redshift OS inclui um hook ALPM/Pacman preventivo:
-- **Arquivo:** `sdata/dist-arch/redshift-doctor-check.hook` (instalado em `/usr/share/libalpm/hooks/redshift-doctor-check.hook`).
-- **Gatilhos:** Upgrades ou instalações de `qt6-base`, `qt6-declarative`, `quickshell*`, `illogical-impulse-quickshell-git` e `illogical-impulse-caelestia-plugin`.
-- **Garantias de Segurança:**
-  - Executa em `PostTransaction`.
-  - **NÃO** executa makepkg ou compilações como root.
-  - **NÃO** bloqueia nem aborta transações completas do sistema (`pacman -Syu`).
-  - Cria um marcador volátil em `/tmp/.redshift-needs-doctor` e no estado do usuário `${XDG_STATE_HOME}/redshift-os/needs-health-check`.
-  - O autostart do compositor (`execs.lua`) e a **Redshift Store** detectam o marcador e orientam o usuário a executar o diagnóstico sem surpresas.
+Atualize o Arch integralmente antes de recompilar. Os comandos usam as receitas distribuídas pelo instalador, inclusive quando executados fora do checkout.
 
----
+```bash
+redshift-doctor --repair quickshell
+redshift-doctor --repair caelestia
+redshift-doctor --repair guard       # Quickshell e Caelestia, se instalado
+```
 
-## 5. Integração com a Redshift Store
+O Guard solicita confirmação, compila como usuário comum em um diretório temporário e só chama `sudo pacman -U` depois que todas as compilações selecionadas terminam. Em seguida, verifica o ABI instalado. `--yes` confirma a recompilação. Use Ctrl + Super + R para carregar o runtime recompilado.
 
-A **Redshift Store** integra verificação reativa de saúde através de:
-- **Backend:** `MaintenanceService` (`maintenance_service.py`), que consulta o `redshift-doctor` e executa verificações de integridade de plugins e linkagem sem criar dependência circular.
-- **Frontend QML:** Componentes `MaintenanceBanner.qml` e `MaintenanceDetailDialog.qml`.
-- **Ações Disponíveis na UI:**
-  - *Ver detalhes:* Exibe a causa raiz real detectada em formato monospace (evitando mensagens genéricas de "instale o pacote" quando o pacote já está presente).
-  - *Executar diagnóstico:* Aciona o `redshift-doctor --check`.
-  - *Reparar componente:* Dispara o reparo assíncrono controlado.
-
----
-
-## 6. Integração com o Instalador `./setup`
-
-Nos perfis `hybrid` e `complete`, o instalador `./setup`:
-1. Valida a presença e linkagem do plugin Caelestia pós-instalação (`verify_post_install_caelestia`).
-2. Registra o resultado no log oficial de instalação.
-3. Informa claramente ao usuário o status de prontidão do Caelestia.
-4. Em caso de ausência ou falha, mantém a instalação íntegra forçando o fallback seguro para `end-4`, sem quebrar a idempotência do sistema.
-5. Preserva integralmente o perfil `minimal` (que opera estritamente com `end-4`).
+A recompilação cobre os pacotes próprios do Redshift. Se o diagnóstico localizar o problema em libcava, sndio ou outra dependência externa, corrija o pacote pelo gerenciador correspondente e rode o diagnóstico novamente. A alternância restaura a interface disponível dentro da sessão. As versões instaladas dos pacotes são administradas pelo Pacman.

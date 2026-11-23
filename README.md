@@ -55,7 +55,7 @@ A alternância entre as duas interfaces ocorre em **tempo de execução com um �
 - 🔒 **Dispatcher Inteligente de Bloqueio (`rice-lock`):** Gerencia a tela de bloqueio respeitando preferências locais (`hyprlock` nativo com o emblema Redshift OS centralizado ou lockers integrados do Quickshell).
 - ⌨️ **Layout de Teclado `us` / `br`:** Alternância rápida entre teclados com atalhos de brilho e áudio unificados.
 - 🛍️ **Redshift Store Nativa:** Central de aplicativos em Qt6/QML integrada nativamente ao Arch Linux (`pacman`, `yay`, AUR e AppStream), com atualização reativa aos 49 tokens Material You do sistema e guardrails de segurança avançados.
-- 🛡️ **Redshift UI Recovery & Watchdog:** Sistema inteligente de supervisão contínua e recuperação da interface gráfica em 4 níveis (`redshift-ui-recover`), com atalhos de emergência no teclado (`Super + Ctrl + Shift + B` e `Ctrl + Super + R`), entrada de menu no launcher, serviço watchdog no systemd de usuário, recuperação de wallpaper/temas sem reiniciar aplicações e guia de resgate via TTY.
+- 🛡️ **Redshift Guard 2.0:** Sistema inteligente de supervisão contínua e recuperação da interface gráfica em 4 níveis (`redshift-ui-recover`), com atalhos de emergência no teclado (`Super + Ctrl + Shift + B` e `Ctrl + Super + R`), entrada de menu no launcher, serviço watchdog no systemd de usuário, recuperação de wallpaper/temas sem reiniciar aplicações e guia de resgate via TTY.
 - 📦 **Perfis Declarativos de Instalação:** Instale exatamente o que precisa através dos perfis `minimal`, `hybrid` ou `complete` (todos integrando a Redshift Store e o UI Recovery).
 
 ---
@@ -192,9 +192,10 @@ Para diagnosticar a saúde dos componentes, plugins nativos e compatibilidade ap
 ```bash
 redshift-doctor --check           # Diagnóstico completo somente-leitura
 redshift-doctor --check caelestia  # Diagnóstico focado no Caelestia
-redshift-doctor --repair caelestia # Recuperação controlada e assistida
+redshift-doctor --check guard      # ABI e monitoramento de atualizações
+redshift-doctor --repair guard     # Recompilação assistida dos pacotes do Redshift
 ```
-Consulte [`docs/REDSHIFT_DOCTOR.md`](file:///home/greyrat/Projetos/dots-hyprland/docs/REDSHIFT_DOCTOR.md) para detalhes completos da arquitetura de resiliência.
+Consulte [`docs/REDSHIFT_DOCTOR.md`](./docs/REDSHIFT_DOCTOR.md) para detalhes completos da arquitetura de resiliência.
 
 ### Atualizando as Configurações
 Para atualizar o rice preservando customizações locais:
@@ -225,9 +226,9 @@ O Redshift OS inclui a **Redshift Store**, uma central moderna de software desen
 
 ---
 
-## Redshift UI Recovery — Supervisão e Recuperação da Interface
+## Redshift Guard 2.0 — Supervisão e Recuperação da Interface
 
-O Redshift OS introduz o utilitário **`redshift-ui-recover`**, uma solução completa e resiliente de diagnóstico, supervisão contínua e recuperação da interface gráfica (frontends Quickshell `end-4` e `caelestia-hybrid`, barra de tarefas, painéis e papéis de parede) sem afetar aplicações do usuário em execução (como navegadores, terminais ou editores de código).
+O instalador oficial configura e valida o Guard nos perfis `minimal`, `hybrid` e `complete`. No login, o Hyprland inicia o serviço de usuário `redshift-ui-watchdog.service`, que supervisiona os frontends Quickshell. O Guard testa a resposta do IPC, recupera o frontend da sessão e mantém os aplicativos abertos.
 
 ### Arquitetura de Recuperação em 4 Níveis
 
@@ -239,10 +240,12 @@ O Redshift OS introduz o utilitário **`redshift-ui-recover`**, uma solução co
 2. **Nível 2 (Recuperação de Wallpaper e Preservação de Cores):**
    - Se apenas o papel de parede ou player de vídeo (`mpvpaper`/`video-bridge`) falhar ou for corrompido, executa a recuperação seletiva sem reiniciar a barra de tarefas e preservando integralmente os 49 tokens Material You e arquivos de tema (`colors.json`, `applied_scheme_type.txt`).
 3. **Nível 3 (Reinício Controlado do Frontend Ativo):**
-   - Se o frontend estiver ausente ou congelado (timeout de IPC > 1s), realiza o encerramento gracioso (`SIGTERM`), limpeza seletiva de PIDs zumbis do Quickshell e inicialização em nova sessão (`setsid`), validando a resposta do socket antes de liberar.
-4. **Nível 4 (Fallback de Segurança para end-4 e Backoff Anti-Loop):**
-   - Em caso de falhas consecutivas (3 ou mais crashes em 60 segundos) no frontend Caelestia, aciona o fallback automático para a interface base estável `end-4`.
-   - Se ambas as interfaces falharem consecutivamente, o supervisor ativa o **Backoff de Segurança**, suspendendo reinicializações em loop para evitar sobrecarga de CPU e alertando o usuário.
+   - Se o frontend estiver ausente ou congelado (timeout de IPC de 2 s), realiza o encerramento gracioso (`SIGTERM`), limpeza limitada aos PIDs do frontend e ao display atual e inicialização em nova sessão (`setsid`), validando a resposta do socket antes de liberar.
+4. **Nível 4 (Fallback e limite de tentativas):**
+   - Após três falhas observadas em 60 segundos, tenta o frontend alternativo via `ui-switch.sh` quando disponível no perfil e dentro do limite de falhas.
+   - O watchdog limita os reinícios automáticos em uma janela de cinco minutos. Quando o fallback também falha ou está indisponível, o supervisor pausa a recuperação até um reinício explícito ou uma alternância concluída via UI Switch.
+
+O Guard verifica alterações de pacotes após transações do Pacman e consulta atualizações oficiais com `checkupdates`. O Doctor apresenta incompatibilidades do Quickshell com Qt e dependências dinâmicas quebradas do Caelestia e da libcava, incluindo sndio quando usado. [Arquitetura, comandos e logs](./docs/REDSHIFT_DOCTOR.md).
 
 ### Atalhos de Teclado no Hyprland
 
@@ -362,7 +365,7 @@ Caso uma transição trave, o compositor fique sem resposta ou ocorra alguma deg
 ## Desenvolvimento e CI
 
 - **Testes locais (sandbox, sem tocar no sistema):** `bash tests/run-tests.sh`.
-- **CI (`.github/workflows/ci.yml`):** executa `Static Syntax & Portability Checks` e `Automated Regression Test Suite (Sandboxed)` em cada Pull Request e push para `main`.
+- **CI (`.github/workflows/ci.yml`):** executa `Static Syntax & Portability Checks` e `Automated Regression Test Suite (Sandboxed)` em cada Pull Request para `main` e push para `main` ou branches `feature/**`.
 - **Workflows herdados do upstream** (moderação automática, notificações do end-4) foram **desativados** e estão preservados em [`.github/workflows-disabled/`](./.github/workflows-disabled/README.md), com a justificativa de cada decisão.
 - O README original do upstream foi preservado em [`docs/upstream/END4-README.md`](./docs/upstream/END4-README.md).
 

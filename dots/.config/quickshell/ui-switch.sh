@@ -5,6 +5,10 @@ set -euo pipefail
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
 XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+XDG_BIN_HOME="${XDG_BIN_HOME:-$HOME/.local/bin}"
+RECOVERY_DIR="$XDG_STATE_HOME/redshift-os"
+GUARD_FALLBACK="${2:-}"
+umask 077
 
 CAEL_CONFIG="$XDG_CONFIG_HOME/quickshell/caelestia-hybrid"
 BRIDGE="$CAEL_CONFIG/scripts/end4-theme-bridge.sh"
@@ -14,9 +18,9 @@ STATE_FILE="$STATE_DIR/current"
 LOCK_FILE="$STATE_DIR/switch.lock"
 VIDEO_PID_FILE="$STATE_DIR/video-bridge.pid"
 
-END4_LOG="${END4_LOG:-/tmp/quickshell-ii.log}"
-CAEL_LOG="${CAEL_LOG:-/tmp/caelestia-hybrid.log}"
-HYPR_LOG="${HYPR_LOG:-/tmp/hypr-ui-switch-reload.log}"
+END4_LOG="${END4_LOG:-$RECOVERY_DIR/quickshell-ii.log}"
+CAEL_LOG="${CAEL_LOG:-$RECOVERY_DIR/caelestia-hybrid.log}"
+HYPR_LOG="${HYPR_LOG:-$RECOVERY_DIR/hypr-ui-switch-reload.log}"
 
 UI_SWITCH_WAIT_ITERS="${UI_SWITCH_WAIT_ITERS:-80}"
 UI_SWITCH_WAIT_SLEEP="${UI_SWITCH_WAIT_SLEEP:-0.1}"
@@ -34,7 +38,7 @@ if [[ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
     unset _rt _sig
 fi
 
-mkdir -p "$STATE_DIR"
+mkdir -p "$STATE_DIR" "$RECOVERY_DIR"
 
 
 notify_user() {
@@ -48,32 +52,27 @@ notify_user() {
 }
 
 
-release_switch_lock() {
-    if command -v flock >/dev/null 2>&1; then
-        flock -u 9 2>/dev/null || true
-        exec 9>&-
-    fi
-}
-
-
 acquire_switch_lock() {
-    if command -v flock >/dev/null 2>&1; then
-        exec 9>"$LOCK_FILE"
-        if ! flock -n 9; then
-            echo "Transição de interface já está em andamento."
-            exit 0
-        fi
-        trap release_switch_lock EXIT INT TERM
+    if [[ "$GUARD_FALLBACK" == --guard-fallback ]]; then
+        [[ "/proc/$$/fd/9" -ef "$LOCK_FILE" ]] && flock -n 9
+        return
     fi
+    exec 9>"$LOCK_FILE"
+    if ! flock -n 9; then
+        echo "Transição de interface já está em andamento."
+        exit 0
+    fi
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
 }
-
 
 reset_recovery_backoff() {
-    local recovery_state="${XDG_STATE_HOME:-$HOME/.local/state}/redshift-os/ui-recovery-state.json"
+    [[ "$GUARD_FALLBACK" == --guard-fallback ]] && return 0
+    local recovery_state="$RECOVERY_DIR/ui-recovery-state.json"
     if [[ -f "$recovery_state" ]] && command -v jq >/dev/null 2>&1; then
         local tmp
         tmp="$(mktemp "${recovery_state}.tmp.XXXXXX")"
-        if jq '.backoff_active = false | .backoff_reason = null' "$recovery_state" > "$tmp" 2>/dev/null; then
+        if jq '.backoff_active = false | .backoff_reason = null | .recent_crashes = [] | .recent_recoveries = []' "$recovery_state" > "$tmp" 2>/dev/null; then
             mv -f "$tmp" "$recovery_state"
         else
             rm -f "$tmp"
@@ -179,7 +178,7 @@ check_caelestia_compatibility() {
 
     if command -v ldd >/dev/null 2>&1; then
         local ldd_out
-        ldd_out="$(ldd -r "$so_file" 2>&1 || true)"
+        ldd_out="$(timeout 10 ldd -r "$so_file" 2>&1 || true)"
         if echo "$ldd_out" | grep -iE "undefined symbol|not found" >/dev/null; then
             local msg="Incompatibilidade detectada entre Caelestia e Qt6/Quickshell. Execute 'redshift-doctor --repair caelestia'."
             echo "ERRO: $msg" >&2
@@ -195,20 +194,20 @@ check_caelestia_compatibility() {
 
 
 running_end4() {
-    qs list --all 2>/dev/null \
-        | grep -Fq "/quickshell/ii/shell.qml"
+    timeout 2 qs list --all 2>/dev/null \
+        | grep -F "/quickshell/ii/shell.qml" >/dev/null
 }
 
 
 running_caelestia() {
-    qs list --all 2>/dev/null \
-        | grep -Fq "/quickshell/caelestia-hybrid/shell.qml"
+    timeout 2 qs list --all 2>/dev/null \
+        | grep -F "/quickshell/caelestia-hybrid/shell.qml" >/dev/null
 }
 
 
 wait_end4() {
     for _ in $(seq 1 "$UI_SWITCH_WAIT_ITERS"); do
-        running_end4 && return 0
+        running_end4 && timeout -k 1 2 qs -c ii ipc show >/dev/null 2>&1 && return 0
         sleep "$UI_SWITCH_WAIT_SLEEP"
     done
 
@@ -218,7 +217,7 @@ wait_end4() {
 
 wait_caelestia() {
     for _ in $(seq 1 "$UI_SWITCH_WAIT_ITERS"); do
-        running_caelestia && return 0
+        running_caelestia && timeout -k 1 2 qs -c caelestia-hybrid ipc show >/dev/null 2>&1 && return 0
         sleep "$UI_SWITCH_WAIT_SLEEP"
     done
 
@@ -229,9 +228,11 @@ wait_caelestia() {
 set_frontend_state() {
     local frontend="$1"
 
-    printf '%s\n' "$frontend" > "$STATE_FILE"
+    local tmp
+    tmp="$(mktemp "$STATE_DIR/current.XXXXXX")" || return 1
+    printf '%s\n' "$frontend" > "$tmp" && mv -f "$tmp" "$STATE_FILE" || return 1
 
-    if ! hyprctl reload >"$HYPR_LOG" 2>&1; then
+    if ! timeout 5 hyprctl reload >"$HYPR_LOG" 2>&1; then
         echo
         echo "ERRO: Hyprland recusou o reload para '$frontend':"
         cat "$HYPR_LOG"
@@ -242,7 +243,8 @@ set_frontend_state() {
 
 start_end4_process() {
     if running_end4; then
-        return 0
+        timeout -k 1 2 qs -c ii ipc show >/dev/null 2>&1
+        return
     fi
 
     setsid -f \
@@ -259,7 +261,8 @@ start_end4_process() {
 
 start_caelestia_process() {
     if running_caelestia; then
-        return 0
+        timeout -k 1 2 qs -c caelestia-hybrid ipc show >/dev/null 2>&1
+        return
     fi
 
     local plugin_dir
@@ -286,7 +289,7 @@ start_caelestia_process() {
     # Detectar crash logo após Configuration Loaded (estabilidade pós-startup).
     sleep "$UI_SWITCH_STABILITY_SLEEP"
 
-    if ! running_caelestia; then
+    if ! running_caelestia || ! timeout -k 1 2 qs -c caelestia-hybrid ipc show >/dev/null 2>&1; then
         echo "ERRO: Caelestia encerrou logo após iniciar." >&2
         tail -n 100 "$CAEL_LOG" 2>/dev/null || true
         return 1
@@ -295,7 +298,7 @@ start_caelestia_process() {
 
 
 restore_end4() {
-    qs kill -c caelestia-hybrid >/dev/null 2>&1 || true
+    timeout -k 1 2 qs kill -c caelestia-hybrid >/dev/null 2>&1 || true
     stop_video_bridge
 
     set_frontend_state end4 || true
@@ -307,7 +310,8 @@ restore_end4() {
 to_caelestia() {
     echo "end-4 -> Caelestia"
 
-    if [[ ! -f "$CAEL_CONFIG/shell.qml" ]]; then
+    if [[ "$(cat "$RECOVERY_DIR/frontend-policy" 2>/dev/null)" == end4 ||
+          ! -f "$CAEL_CONFIG/shell.qml" ]]; then
         echo "ERRO: caelestia-hybrid não está instalado em:"
         echo "$CAEL_CONFIG"
         notify_user "normal" "Caelestia indisponível" "O perfil atual não inclui caelestia-hybrid. Mantendo end-4 ativo."
@@ -334,8 +338,14 @@ to_caelestia() {
         return 1
     fi
 
-    # Sincronizar tema antes de matar o frontend atual.
-    "$BRIDGE"
+    if [[ -x "$XDG_BIN_HOME/redshift-guard" ]] &&
+        ! "$XDG_BIN_HOME/redshift-guard" --abi caelestia; then
+        echo "Execute redshift-doctor --check guard para diagnosticar o runtime." >&2
+        return 1
+    fi
+
+    # Sincronizar tema antes de parar o frontend atual.
+    timeout -k 2 20 "$BRIDGE" 9>&- || return 1
 
     # Limpar eventuais overrides de Game Mode do end-4 para não interferir no Caelestia
     local end4_cfg="$XDG_CONFIG_HOME/quickshell/ii/scripts/hyprland/hyprconfigurator.py"
@@ -352,14 +362,18 @@ to_caelestia() {
             --reset general:allow_tearing >/dev/null 2>&1 || true
     fi
 
-    qs kill -c ii >/dev/null 2>&1 || true
+    timeout -k 1 2 qs kill -c ii >/dev/null 2>&1 || true
     sleep "$UI_SWITCH_WAIT_SLEEP"
 
     # Nível 3 — Operacionalidade: Primeiro sobe o shell, porque os novos binds chamam IPC dele.
     if ! start_caelestia_process; then
         echo "ERRO: Falha operacional no Caelestia (Nível 3). Executando rollback seguro para end-4..." >&2
         notify_user "critical" "Falha ao iniciar Caelestia" "O frontend Caelestia falhou na inicialização ou encerrou inesperadamente. Rollback automático seguro executado para end-4."
-        restore_end4
+        if [[ "$GUARD_FALLBACK" != --guard-fallback ]]; then
+            restore_end4
+        else
+            timeout -k 1 2 qs kill -c caelestia-hybrid >/dev/null 2>&1 || true
+        fi
         return 1
     fi
 
@@ -367,7 +381,11 @@ to_caelestia() {
     if ! set_frontend_state caelestia; then
         echo "Rollback para end-4..." >&2
         notify_user "critical" "Falha no reload do Hyprland" "Executando rollback automático seguro para end-4."
-        restore_end4
+        if [[ "$GUARD_FALLBACK" != --guard-fallback ]]; then
+            restore_end4
+        else
+            timeout -k 1 2 qs kill -c caelestia-hybrid >/dev/null 2>&1 || true
+        fi
         return 1
     fi
 
@@ -381,20 +399,20 @@ to_end4() {
 
     # Desativar Game Mode do Caelestia se ativo para não deixar gaps zerados no compositor
     if [[ -x "$CAEL_CONFIG/scripts/gamemode.sh" ]]; then
-        "$CAEL_CONFIG/scripts/gamemode.sh" off >/dev/null 2>&1 || true
+        timeout -k 1 5 "$CAEL_CONFIG/scripts/gamemode.sh" off 9>&- >/dev/null 2>&1 || true
     fi
 
-    qs kill -c caelestia-hybrid >/dev/null 2>&1 || true
+    timeout -k 1 2 qs kill -c caelestia-hybrid >/dev/null 2>&1 || true
     stop_video_bridge
     sleep "$UI_SWITCH_WAIT_SLEEP"
 
-    if ! set_frontend_state end4; then
-        echo "ERRO ao restaurar binds do end-4."
+    if ! start_end4_process; then
+        echo "ERRO ao iniciar end-4."
         return 1
     fi
 
-    if ! start_end4_process; then
-        echo "ERRO ao iniciar end-4."
+    if ! set_frontend_state end4; then
+        echo "ERRO ao restaurar binds do end-4."
         return 1
     fi
 
@@ -439,10 +457,12 @@ case "${1:-toggle}" in
         acquire_switch_lock
         if running_caelestia && ! running_end4; then
             # Mesmo se já estiver rodando, garantir estado/binds.
+            timeout -k 1 2 qs -c caelestia-hybrid ipc show >/dev/null 2>&1
             set_frontend_state caelestia
+            reset_recovery_backoff
             echo "Caelestia já está ativo."
         else
-            qs kill -c caelestia-hybrid >/dev/null 2>&1 || true
+            timeout -k 1 2 qs kill -c caelestia-hybrid >/dev/null 2>&1 || true
             to_caelestia
         fi
         ;;
@@ -451,7 +471,9 @@ case "${1:-toggle}" in
         acquire_switch_lock
         if running_end4 && ! running_caelestia; then
             stop_video_bridge
+            timeout -k 1 2 qs -c ii ipc show >/dev/null 2>&1
             set_frontend_state end4
+            reset_recovery_backoff
             echo "end-4 já está ativo."
         else
             to_end4

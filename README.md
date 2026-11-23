@@ -365,7 +365,7 @@ Caso uma transição trave, o compositor fique sem resposta ou ocorra alguma deg
 ## Desenvolvimento e CI
 
 - **Testes locais (sandbox, sem tocar no sistema):** `bash tests/run-tests.sh`.
-- **CI (`.github/workflows/ci.yml`):** executa `Static Syntax & Portability Checks` e `Automated Regression Test Suite (Sandboxed)` em cada Pull Request para `main` e push para `main` ou branches `feat/**` e `feature/**`.
+- **CI (`.github/workflows/ci.yml`):** executa `Static Syntax & Portability Checks` e `Automated Regression Test Suite (Sandboxed)` em cada Pull Request para `main` e push para `main` ou branches `feature/**`.
 - **Workflows herdados do upstream** (moderação automática, notificações do end-4) foram **desativados** e estão preservados em [`.github/workflows-disabled/`](./.github/workflows-disabled/README.md), com a justificativa de cada decisão.
 - O README original do upstream foi preservado em [`docs/upstream/END4-README.md`](./docs/upstream/END4-README.md).
 

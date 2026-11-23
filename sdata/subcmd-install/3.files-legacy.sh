@@ -4,11 +4,11 @@
 # shellcheck shell=bash
 
 #####################################################################################
-# MISC (For dots/.config/* but not quickshell, not caelestia, not fish, not Hyprland, not fontconfig)
+# MISC (For dots/.config/* but not quickshell, not caelestia, not fish, not Hyprland, not fontconfig or systemd)
 case "${SKIP_MISCCONF}" in
   true) true;;
   *)
-    for i in $(find dots/.config/ -mindepth 1 -maxdepth 1 ! -name 'quickshell' ! -name 'caelestia' ! -name 'fish' ! -name 'hypr' ! -name 'fontconfig' -exec basename {} \;); do
+    for i in $(find dots/.config/ -mindepth 1 -maxdepth 1 ! -name 'quickshell' ! -name 'caelestia' ! -name 'fish' ! -name 'hypr' ! -name 'fontconfig' ! -name 'systemd' -exec basename {} \;); do
 #      i="dots/.config/$i"
       echo "[$0]: Found target: dots/.config/$i"
       if [ -d "dots/.config/$i" ];then install_dir__sync "dots/.config/$i" "$XDG_CONFIG_HOME/$i"
@@ -96,4 +96,4 @@ install_file "dots/.local/bin/rice-lock" "${XDG_BIN_HOME}"/rice-lock
 install_file "dots/.local/bin/redshift-store" "${XDG_BIN_HOME}"/redshift-store
 install_file "dots/.local/bin/redshift-doctor" "${XDG_BIN_HOME}"/redshift-doctor
 install_file "dots/.local/bin/redshift-ui-recover" "${XDG_BIN_HOME}"/redshift-ui-recover
-
+install_file "dots/.local/bin/redshift-guard" "${XDG_BIN_HOME}/redshift-guard"

@@ -74,7 +74,7 @@ local function hybrid_frontend()
     -- Caelestia só recebe seus binds se sua instância
     -- Quickshell realmente já estiver rodando.
     local proc =
-        io.popen("qs list --all 2>/dev/null")
+        io.popen("timeout 2 qs -c caelestia-hybrid ipc show 2>/dev/null")
 
     if not proc then
         return "end4"
@@ -83,15 +83,7 @@ local function hybrid_frontend()
     local instances =
         proc:read("*a") or ""
 
-    proc:close()
-
-    local caelestia_running =
-        string.find(
-            instances,
-            "/quickshell/caelestia-hybrid/shell.qml",
-            1,
-            true
-        ) ~= nil
+    local caelestia_running = proc:close() and instances ~= ""
 
     if caelestia_running then
         return "caelestia"

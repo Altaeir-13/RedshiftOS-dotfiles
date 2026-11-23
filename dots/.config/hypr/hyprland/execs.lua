@@ -3,9 +3,9 @@ hl.on("hyprland.start", function ()
 
     -- Bar, wallpaper
     hl.exec_cmd("$HOME/.config/hypr/hyprland/scripts/start_geoclue_agent.sh")
-    hl.exec_cmd("qs -c $qsConfig")
     hl.exec_cmd("$HOME/.config/hypr/custom/scripts/__restore_video_wallpaper.sh")
-    hl.exec_cmd("systemctl --user start redshift-ui-watchdog.service 2>/dev/null || $HOME/.local/bin/redshift-ui-recover --watchdog &")
+    -- redshift-ui-watchdog.service starts with the current Wayland session environment.
+    hl.exec_cmd([["${XDG_BIN_HOME:-$HOME/.local/bin}/redshift-ui-recover" --session-start]])
 
     -- Core components (authentication, lock screen, notification daemon)
     hl.exec_cmd("gnome-keyring-daemon --start --components=secrets")
@@ -23,7 +23,4 @@ hl.on("hyprland.start", function ()
 
     -- Cursor
     hl.exec_cmd("hyprctl setcursor Bibata-Modern-Classic 24")
-
-    -- Redshift Doctor: notification on system update marker
-    hl.exec_cmd("bash -c 'if [[ -f /tmp/.redshift-needs-doctor ]] || [[ -f \"${XDG_STATE_HOME:-$HOME/.local/state}/redshift-os/needs-health-check\" ]]; then notify-send -u normal -a \"Redshift Doctor\" \"Atualização de Sistema Detectada\" \"Pacotes Qt/Quickshell foram atualizados. Execute redshift-doctor --check para validar o ambiente.\" 2>/dev/null || true; fi'")
 end)

@@ -337,11 +337,49 @@ fi
 
 #####################################################################################
 
-if [[ "${DRY_RUN:-false}" != "true" ]]; then
-  mkdir -p "${XDG_STATE_HOME}/quickshell/ui-switch"
-  if [[ "${INSTALL_CAELESTIA_HYBRID:-true}" != "true" ]] || [[ ! -f "${XDG_STATE_HOME}/quickshell/ui-switch/current" ]]; then
-    printf 'end4\n' > "${XDG_STATE_HOME}/quickshell/ui-switch/current"
+function configure_redshift_guard(){
+  local package_dir=./sdata/dist-arch
+  local quick=illogical-impulse-quickshell-git
+  local plugin=illogical-impulse-caelestia-plugin
+  local recipe_root="$XDG_DATA_HOME/redshift-guard/pkgs"
+  local guard_state="$XDG_STATE_HOME/redshift-os"
+  local frontend_state="$XDG_STATE_HOME/quickshell/ui-switch"
+  local policy=end4 validation_rc=0 arg= file
+
+  if [[ "$OS_GROUP_ID" == arch && "${INSTALL_VIA_NIX:-false}" != true ]]; then
+    arg=arch
+    for file in "$quick/PKGBUILD" "$quick/quickshell-check.hook" \
+      "$quick/redshift-doctor-check.hook" "$plugin/PKGBUILD"; do
+      cp_file "$package_dir/$file" "$recipe_root/$file"
+    done
   fi
+
+  if [[ "${DRY_RUN:-false}" == true ]]; then
+    echo "[DRY-RUN] Would configure the Redshift Guard user service and validate installed files and ABI."
+    return 0
+  fi
+  [[ "${INSTALL_CAELESTIA_HYBRID:-true}" != true ]] || policy=hybrid
+  mkdir -p "$guard_state" "$frontend_state"
+  printf '%s\n' "$policy" > "$guard_state/frontend-policy"
+  if [[ "$policy" == end4 || ! -f "$frontend_state/current" ]]; then
+    printf 'end4\n' > "$frontend_state/current"
+  fi
+
+  "$XDG_BIN_HOME/redshift-guard" --validate-install "$arg" || validation_rc=$?
+  if (( validation_rc == 2 )); then
+    echo "Redshift Guard: avisos de runtime. Consulte redshift-doctor --check guard."
+  elif (( validation_rc != 0 )); then
+    return "$validation_rc"
+  fi
+
+  # Loading the unit is sufficient here. Hyprland starts it with the session environment.
+  if command -v systemctl >/dev/null; then
+    systemctl --user daemon-reload 2>/dev/null || true
+  fi
+}
+
+if [[ "${SKIP_QUICKSHELL:-false}" != true ]]; then
+  configure_redshift_guard
 fi
 
 v gen_firstrun

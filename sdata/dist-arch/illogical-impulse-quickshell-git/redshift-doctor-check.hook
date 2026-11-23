@@ -1,0 +1,19 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = qt6-*
+Target = quickshell*
+Target = illogical-impulse-quickshell-git
+Target = illogical-impulse-caelestia-plugin
+Target = libcava
+Target = sndio
+Target = ffmpeg
+Target = aubio
+Target = libpipewire
+
+[Action]
+Description = Notificando o Redshift Guard sobre alterações no runtime...
+When = PostTransaction
+Exec = /usr/bin/bash -c '/usr/bin/install -d -m 755 /var/lib/redshift-guard && /usr/bin/touch /var/lib/redshift-guard/pacman-transaction'

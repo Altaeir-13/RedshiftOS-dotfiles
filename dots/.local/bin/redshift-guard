@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+# Arch update monitoring, ABI diagnostics and assisted rebuilds for Redshift OS.
+set -uo pipefail
+export LC_ALL=C
+umask 077
+
+config="${XDG_CONFIG_HOME:-$HOME/.config}"
+state="${XDG_STATE_HOME:-$HOME/.local/state}/redshift-os"
+data="${XDG_DATA_HOME:-$HOME/.local/share}"
+bin_dir="${XDG_BIN_HOME:-$HOME/.local/bin}"
+recipes="$data/redshift-guard/pkgs"
+stamp=/var/lib/redshift-guard/pacman-transaction
+quick_pkg=illogical-impulse-quickshell-git
+cael_pkg=illogical-impulse-caelestia-plugin
+pkg_pattern='^(qt6-[^ ]*|quickshell(-git)?|illogical-impulse-(quickshell-git|caelestia-plugin)|qt6-m3shapes-git|libcava|sndio|ffmpeg|aubio|libpipewire) '
+
+frontend() {
+    if [[ "$(cat "$state/frontend-policy" 2>/dev/null)" != end4 &&
+          -f "$config/quickshell/caelestia-hybrid/shell.qml" ]]; then
+        echo caelestia
+    else
+        echo end4
+    fi
+}
+
+link_check() {
+    local output
+    if ! output="$(timeout 10 ldd -r "$1" 2>&1)" ||
+        [[ "$output" =~ (not\ found|undefined\ symbol) ]]; then
+        printf 'Falha de ABI em %s\n%s\n' "$1" "$output"
+        return 1
+    fi
+}
+
+caelestia_abi() {
+    local root entry found=false failed=0 qt_qml
+    qt_qml="$(timeout 5 qtpaths6 --query QT_INSTALL_QML 2>/dev/null || true)"
+    local -a roots=("${CAELESTIA_QML_PATH:-}")
+    if [[ "${CAELESTIA_QML_ONLY:-false}" != true ]]; then
+        roots+=("$qt_qml" /usr/lib/qt6/qml /usr/local/lib/qt6/qml
+            "$data/quickshell/qml" "$HOME/.local/lib/qt6/qml")
+    fi
+    for root in "${roots[@]}"; do
+        [[ -n "$root" && -r "$root/Caelestia/qmldir" ]] || continue
+        while IFS= read -r -d '' entry; do
+            found=true
+            link_check "$entry" || failed=1
+        done < <(find "$root/Caelestia" -type f -name '*.so*' -print0)
+        break
+    done
+    if ! $found; then
+        echo 'Módulo QML nativo Caelestia ausente ou incompleto.'
+        return 1
+    fi
+    (( failed == 0 )) && echo 'Caelestia: QML e bibliotecas nativas validados.'
+    return "$failed"
+}
+
+abi() {
+    local target="${1:-$(frontend)}" shell output entry files failed=0
+    shell="$(command -v qs || command -v quickshell || true)"
+    if [[ -z "$shell" ]]; then
+        echo 'Quickshell ausente.'
+        failed=1
+    elif ! output="$(timeout 10 "$shell" --private-check-compat 2>&1)" ||
+        [[ "${output,,}" =~ (incompatib|mismatch|undefined\ symbol|not\ found|error|warn) ]]; then
+        printf 'Verificação Quickshell/Qt falhou.\n%s\n' "$output"
+        failed=1
+    elif link_check "$shell"; then
+        echo 'Quickshell: compatibilidade Qt e dependências dinâmicas validadas.'
+    else
+        failed=1
+    fi
+
+    if [[ "$target" == caelestia ]]; then
+        caelestia_abi || failed=1
+        if command -v pacman >/dev/null; then
+            files="$(pacman -Qlq libcava 2>/dev/null | awk '/\/libcava\.so$/ {print; found=1} END {if (!found) exit 1}')"
+            if [[ -z "$files" ]]; then
+                echo 'libcava ausente no banco local do Pacman.'
+                failed=1
+            else
+                while IFS= read -r entry; do
+                    if link_check "$entry"; then
+                        echo 'libcava: dependências dinâmicas resolvidas, incluindo sndio quando vinculado.'
+                    else
+                        failed=1
+                    fi
+                done <<< "$files"
+            fi
+        fi
+    fi
+    return "$failed"
+}
+
+fingerprint() {
+    local installed
+    installed="$(pacman -Q)" || return 1
+    {
+        printf '%s\n' "$installed" | awk -v pattern="$pkg_pattern" '$0 ~ pattern'
+        stat -c '%y %i' "$stamp" 2>/dev/null || true
+        printf '%s\n' "$(frontend)" "${CAELESTIA_QML_PATH:-}"
+    } | sha256sum | cut -d ' ' -f 1
+}
+
+monitor() (
+    command -v pacman >/dev/null || return 0
+    mkdir -p "$state" || return 1
+    exec 8>"$state/guard-update.lock"
+    flock -n 8 || return 0
+
+    local before after result pending_rc=0 now last changed=false
+    before="$(fingerprint)" || return 1
+    if [[ "$before" != "$(cat "$state/guard-fingerprint" 2>/dev/null)" ]]; then
+        local rc=0
+        result="$(abi)" || rc=$?
+        after="$(fingerprint)" || return 1
+        # A transaction during the check will be inspected on the next pass.
+        [[ "$before" == "$after" ]] || return 0
+        printf '%s\n%s\n' "$rc" "$result" > "$state/guard-abi.tmp" &&
+            mv -f "$state/guard-abi.tmp" "$state/guard-abi" &&
+            printf '%s\n' "$before" > "$state/guard-fingerprint.tmp" &&
+            mv -f "$state/guard-fingerprint.tmp" "$state/guard-fingerprint" || return 1
+        printf '%s\n' "$result"
+        if (( rc != 0 )); then
+            timeout 5 notify-send -a 'Redshift Guard' 'Incompatibilidade de runtime' \
+                'Execute redshift-doctor --check guard para ver detalhes.' 2>/dev/null || true
+        fi
+    fi
+
+    now="$(date +%s)"
+    last="$(stat -c %Y "$state/guard-updates" 2>/dev/null || echo 0)"
+    (( now - last >= 21600 || now < last )) || return 0
+    last="$(stat -c %Y "$state/guard-update-error" 2>/dev/null || echo 0)"
+    (( now - last >= 900 || now < last )) || return 0
+    if ! command -v checkupdates >/dev/null; then
+        echo 'checkupdates indisponível. Instale pacman-contrib.'
+        return 1
+    fi
+    # checkupdates uses an isolated sync database and does not install packages.
+    result="$(CHECKUPDATES_DB="$state/checkupdates-db" timeout -k 5 120 checkupdates --nocolor 2>&1)" || pending_rc=$?
+    if (( pending_rc != 0 && pending_rc != 2 )); then
+        printf 'Consulta de atualizações falhou (%s).\n%s\n' "$pending_rc" "$result" >&2
+        printf 'falha (%s) em %s\n' "$pending_rc" "$(date -Is)" > "$state/guard-update-error"
+        return 1
+    fi
+    (( pending_rc == 2 )) && result=
+    rm -f "$state/guard-update-error"
+    [[ "$result" != "$(cat "$state/guard-updates" 2>/dev/null)" ]] && changed=true
+    printf '%s\n' "$result" > "$state/guard-updates.tmp" &&
+        mv -f "$state/guard-updates.tmp" "$state/guard-updates" || return 1
+    if $changed && [[ -n "$result" ]]; then
+        printf 'Atualizações oficiais disponíveis:\n%s\n' "$result"
+        timeout 5 notify-send -a 'Redshift Guard' 'Atualizações do Arch disponíveis' \
+            'Consulte redshift-guard --status.' 2>/dev/null || true
+    fi
+)
+
+status() {
+    local rc=0 installed
+    abi || rc=1
+    if command -v pacman >/dev/null; then
+        installed="$(fingerprint)" || return 1
+        if [[ "$installed" != "$(cat "$state/guard-fingerprint" 2>/dev/null)" ]]; then
+            echo 'Verificação em segundo plano pendente para a versão atual dos pacotes.'
+            (( rc == 0 )) && rc=2
+        fi
+        if [[ -s "$state/guard-update-error" ]]; then
+            printf 'Última consulta de atualizações: %s\n' "$(cat "$state/guard-update-error")"
+            (( rc == 0 )) && rc=2
+        fi
+        if [[ -s "$state/guard-updates" ]]; then
+            printf 'Última consulta bem-sucedida (%s)\n' "$(date -r "$state/guard-updates" -Is)"
+            if [[ -n "$(cat "$state/guard-updates")" ]]; then
+                cat "$state/guard-updates"
+            else
+                echo 'Nenhuma atualização oficial pendente nessa consulta.'
+            fi
+        else
+            echo 'Consulta de atualizações oficiais ainda pendente.'
+        fi
+    fi
+    return "$rc"
+}
+
+validate_install() {
+    local path tool rc=0
+    for path in "$bin_dir/redshift-doctor" "$bin_dir/redshift-ui-recover" \
+        "$config/quickshell/ui-switch.sh"; do
+        [[ -x "$path" ]] || { printf 'Executável ausente: %s\n' "$path"; return 1; }
+    done
+    [[ -r "$config/systemd/user/redshift-ui-watchdog.service" &&
+       -r "$config/quickshell/ii/shell.qml" &&
+       -x "$data/redshift-os/recovery/recover-wallpaper.sh" ]] || {
+        echo 'Instalação incompleta do serviço, frontend ou script de recuperação.'
+        return 1
+    }
+    for tool in flock timeout python3 jq; do
+        command -v "$tool" >/dev/null || { printf 'Comando ausente: %s\n' "$tool"; return 1; }
+    done
+    if [[ "${1:-}" == arch ]]; then
+        [[ -r "$recipes/$quick_pkg/PKGBUILD" && -r "$recipes/$cael_pkg/PKGBUILD" ]] ||
+            { echo 'Receitas de recompilação ausentes.'; return 1; }
+        if ! command -v checkupdates >/dev/null ||
+           [[ ! -r /usr/share/libalpm/hooks/redshift-doctor-check.hook ]]; then
+            echo 'Monitoramento Arch incompleto. Verifique pacman-contrib e o pacote Quickshell do Redshift.'
+            rc=2
+        fi
+    fi
+    abi || rc=2
+    if (( rc == 0 )); then
+        echo 'Redshift Guard 2.0: instalação validada.'
+    fi
+    return "$rc"
+}
+
+rebuild() (
+    local target="${1:-all}" answer work pkg recipe listing archive
+    local -a selected=() archives=()
+    case "$target" in
+        quickshell) selected=("$quick_pkg") ;;
+        caelestia) selected=("$cael_pkg") ;;
+        all)
+            selected=("$quick_pkg")
+            pacman -Qq "$cael_pkg" >/dev/null 2>&1 && selected+=("$cael_pkg")
+            ;;
+        *) echo 'Use quickshell, caelestia ou all.' >&2; return 2 ;;
+    esac
+    for pkg in "${selected[@]}"; do
+        if [[ ! -r "$recipes/$pkg/PKGBUILD" ]] || ! pacman -Qq "$pkg" >/dev/null; then
+            printf 'Pacote ou receita oficial ausente: %s. Execute o instalador do perfil correspondente.\n' "$pkg" >&2
+            return 1
+        fi
+    done
+    printf 'Recompilar para as bibliotecas instaladas e instalar via Pacman: %s\n' "${selected[*]}"
+    echo 'Use um sistema Arch totalmente atualizado antes de recompilar.'
+    if [[ "${2:-}" != --yes ]]; then
+        read -r -p 'Prosseguir? [s/N] ' answer
+        [[ "$answer" == [sSyY] ]] || return 2
+    fi
+
+    mkdir -p "$state" || return 1
+    exec 8>"$state/guard-rebuild.lock"
+    flock -n 8 || { echo 'Já existe uma recompilação em andamento.' >&2; return 1; }
+    work="$(mktemp -d)" || return 1
+    trap 'rm -rf -- "$work"' EXIT
+    for pkg in "${selected[@]}"; do
+        recipe="$work/$pkg"
+        cp -R -- "$recipes/$pkg" "$recipe" || return 1
+        export PKGDEST="$recipe" SRCDEST="$recipe" BUILDDIR="$recipe"
+        if ! (cd "$recipe" && makepkg --syncdeps --force); then
+            echo 'Compilação falhou. Verifique as dependências indicadas antes de repetir.' >&2
+            return 1
+        fi
+        listing="$(cd "$recipe" && makepkg --packagelist)" || return 1
+        while IFS= read -r archive; do
+            [[ -f "$archive" ]] || return 1
+            archives+=("$archive")
+        done <<< "$listing"
+    done
+    sudo pacman -U -- "${archives[@]}" || return 1
+    if [[ "$target" == caelestia ]]; then
+        abi caelestia || return 1
+    else
+        abi || return 1
+    fi
+    echo 'Recompilação validada. Reinicie o frontend pelo atalho Ctrl+Super+R.'
+)
+
+if (( EUID == 0 )); then
+    echo 'Execute redshift-guard como usuário normal.' >&2
+    exit 1
+fi
+case "${1:---status}" in
+    --status) status ;;
+    --abi) abi "${2:-$(frontend)}" ;;
+    --monitor) monitor ;;
+    --validate-install) validate_install "${2:-}" ;;
+    --rebuild) rebuild "${2:-all}" "${3:-}" ;;
+    --help|-h) echo 'Uso: redshift-guard --status | --abi | --rebuild [quickshell|caelestia|all] [--yes]' ;;
+    *) echo 'Opção inválida. Consulte redshift-guard --help.' >&2; exit 2 ;;
+esac

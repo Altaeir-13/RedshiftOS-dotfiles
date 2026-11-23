@@ -8,7 +8,7 @@ _prefix='illogical-impulse'
 _pkgname=quickshell
 pkgname="$_prefix-$_pkgname-git"
 pkgver=0.1.0.r1
-pkgrel=8
+pkgrel=9
 pkgdesc="$_pkgname-git pinned commit and extra deps for $_prefix"
 arch=(x86_64 aarch64)
 url='https://git.outfoxxed.me/quickshell/quickshell'
@@ -24,6 +24,7 @@ depends=(
   'libdrm'
   'libpipewire'
   'libxcb'
+  'pacman-contrib'
   'wayland'
   # NOTE: Below are custom dependencies of illogical-impulse
   qt6-5compat 
@@ -58,9 +59,11 @@ conflicts=("$_pkgname" "$_pkgname-git")
 
 _pkgsrc="$_pkgname"
 source=("$_pkgsrc::git+$url.git#commit=$_commit"
-  quickshell-check.hook)
+  quickshell-check.hook
+  redshift-doctor-check.hook)
 sha256sums=('SKIP'
-  '8543e21aeaaa5441b73a679160e7601a957f16c433e8d6bd9257e80bd0e94083')
+  '8543e21aeaaa5441b73a679160e7601a957f16c433e8d6bd9257e80bd0e94083'
+  '81fdac304cc1397dc8bc5ab5937c0366e371a120f3007840aa6bd0c34a3b931c')
 
 build() {
   cd "$_pkgname"
@@ -75,7 +78,7 @@ build() {
 }
 
 package() {
-  install -Dm644 "quickshell-check.hook" -t "$pkgdir/usr/share/libalpm/hooks"
+  install -Dm644 quickshell-check.hook redshift-doctor-check.hook -t "$pkgdir/usr/share/libalpm/hooks"
   cd "$_pkgname"
   DESTDIR="$pkgdir" cmake --install build
   install -Dm644 "LICENSE" -t "$pkgdir/usr/share/licenses/$_pkgname"

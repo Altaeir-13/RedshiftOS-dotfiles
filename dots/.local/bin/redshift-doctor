@@ -94,20 +94,10 @@ Códigos de saída:
 EOF
 }
 
-# Resolve candidate directories for Caelestia QML
-get_caelestia_candidates() {
-    local -a cands=()
-    if [[ -n "${CAELESTIA_QML_PATH:-}" ]]; then
-        cands+=("$CAELESTIA_QML_PATH")
-    fi
-    cands+=(
-        "/usr/lib/qt6/qml"
-        "/usr/local/lib/qt6/qml"
-        "$XDG_DATA_HOME/quickshell/qml"
-        "$HOME/.local/lib/qt6/qml"
-    )
-    printf '%s\n' "${cands[@]}"
-}
+qml_helper="$XDG_DATA_HOME/redshift-os/recovery/caelestia-qml.sh"
+if [[ -r "$qml_helper" ]]; then
+    source "$qml_helper"
+fi
 
 # Check Frontend End-4
 check_end4() {
@@ -151,81 +141,33 @@ check_caelestia_frontend() {
 
 # Check Caelestia QML Module, Shared Objects, and Qt6 Compatibility
 check_caelestia_plugin() {
-    local found_dir=""
-    local cand
-    while IFS= read -r cand; do
-        if [[ -n "$cand" ]] && [[ -d "$cand/Caelestia" ]]; then
-            found_dir="$cand/Caelestia"
-            break
-        fi
-    done < <(get_caelestia_candidates)
-
-    if [[ -z "$found_dir" ]]; then
-        record ERROR "plugin" "Plugin Caelestia" "Diretório QML 'Caelestia' não encontrado em nenhum caminho de busca"
+    local root details
+    if ! declare -F redshift_resolve_caelestia_qml >/dev/null; then
+        record ERROR "plugin" "Plugin Caelestia" "Diagnóstico QML ausente em $qml_helper. Execute ./setup install."
         return
     fi
-
-    record OK "plugin" "Diretório Caelestia QML" "Encontrado em $found_dir"
-
-    # 1. qmldir check
-    if [[ -f "$found_dir/qmldir" ]]; then
-        record OK "plugin" "Arquivo qmldir Caelestia" "qmldir presente em $found_dir/qmldir"
-    else
-        record ERROR "plugin" "Arquivo qmldir Caelestia" "qmldir ausente em $found_dir"
+    if ! root="$(redshift_resolve_caelestia_qml 2>&1)"; then
+        record ERROR "plugin" "Plugin Caelestia" "$root"
+        return
     fi
+    record OK "plugin" "Diretório Caelestia QML" "Encontrado em $root/Caelestia"
 
-    # 2. QML core files: Tr.qml, Units.qml
-    local tr_file
-    local units_file
-    tr_file="$(find "$found_dir" -name "Tr.qml" 2>/dev/null | head -n 1 || true)"
-    units_file="$(find "$found_dir" -name "Units.qml" 2>/dev/null | head -n 1 || true)"
-
-    if [[ -n "$tr_file" ]] && [[ -n "$units_file" ]]; then
+    if [[ -r "$root/Caelestia/I18n/Tr.qml" && -r "$root/Caelestia/I18n/Units.qml" ]]; then
         record OK "plugin" "Arquivos I18n QML (Tr.qml, Units.qml)" "Arquivos essenciais de internacionalização presentes"
     else
-        record WARN "plugin" "Arquivos I18n QML (Tr.qml, Units.qml)" "Tr.qml ou Units.qml ausentes sob $found_dir"
+        record WARN "plugin" "Arquivos I18n QML (Tr.qml, Units.qml)" "Arquivos fonte de internacionalização ausentes em $root/Caelestia/I18n"
     fi
 
-    # 3. Native shared libraries (.so)
-    local -a so_files=()
-    while IFS= read -r -d '' f; do
-        so_files+=("$f")
-    done < <(find "$found_dir" -type f -name "*.so*" -print0 2>/dev/null || true)
-
-    if (( ${#so_files[@]} == 0 )); then
-        # Scenario D: qmldir present but native libraries missing (incomplete installation)
-        record ERROR "plugin" "Bibliotecas Nativas Caelestia (.so)" "qmldir presente em $found_dir, mas nenhuma biblioteca nativa (.so) foi encontrada (instalação incompleta)"
-        return
-    fi
-
-    record OK "plugin" "Bibliotecas Nativas Caelestia (.so)" "${#so_files[@]} biblioteca(s) encontrada(s) sob $found_dir"
-
-    # 4. Qt6 Compatibility & Symbol resolution (ldd -r)
-    local has_undefined=false
-    local ldd_bin
-    ldd_bin="$(command -v ldd 2>/dev/null || true)"
-
-    if [[ -n "$ldd_bin" ]]; then
-        for so in "${so_files[@]}"; do
-            local ldd_out
-            ldd_out="$(timeout 10 "$ldd_bin" -r "$so" 2>&1 || true)"
-            if echo "$ldd_out" | grep -qiE "undefined symbol|not found"; then
-                has_undefined=true
-                local undef_summary
-                undef_summary="$(echo "$ldd_out" | grep -iE "undefined symbol|not found" | head -n 2 | sed 's/^[ \t]*//' | tr '\n' ' ')"
-                record ERROR "qt6_compat" "Compatibilidade Qt6 (${so##*/})" "Símbolos indefinidos detectados via ldd -r: $undef_summary"
-            fi
-        done
-        if [[ "$has_undefined" == "false" ]]; then
-            record OK "qt6_compat" "Compatibilidade Qt6" "Todas as bibliotecas nativas foram validadas sem símbolos indefinidos"
-        fi
+    if details="$(redshift_caelestia_link_check "$root" 2>&1)"; then
+        record OK "qt6_compat" "Compatibilidade Qt6" "Bibliotecas nativas validadas via ldd -r"
     else
-        record WARN "qt6_compat" "Compatibilidade Qt6" "Comando ldd não disponível para análise de símbolos ELF"
+        record ERROR "qt6_compat" "Compatibilidade Qt6" "Símbolos indefinidos ou falha de verificação via ldd -r: $details"
     fi
 }
 
 # Check M3Shapes QML module
 check_m3shapes() {
+    declare -F redshift_qml_roots >/dev/null || return 0
     local found=false
     local cand
     while IFS= read -r cand; do
@@ -234,7 +176,7 @@ check_m3shapes() {
             record OK "plugin" "Módulo QML M3Shapes" "Presente em $cand/M3Shapes"
             break
         fi
-    done < <(get_caelestia_candidates)
+    done < <(redshift_qml_roots)
 
     if [[ "$found" == "false" ]]; then
         record WARN "plugin" "Módulo QML M3Shapes" "M3Shapes não encontrado nos diretórios QML (qt6-m3shapes-git)"
@@ -368,17 +310,8 @@ check_packages() {
             record OK "packages" "Pacote $pkg" "Instalado ($pinfo, origem: $repo)"
         else
             if [[ "$pkg" == "illogical-impulse-caelestia-plugin" ]]; then
-                # Check if native plugin was found in QML candidate path
-                local qml_found=false
-                local cand
-                while IFS= read -r cand; do
-                    if [[ -n "$cand" ]] && [[ -f "$cand/Caelestia/qmldir" ]]; then
-                        qml_found=true
-                        break
-                    fi
-                done < <(get_caelestia_candidates)
-
-                if [[ "$qml_found" == "true" ]]; then
+                if declare -F redshift_resolve_caelestia_qml >/dev/null &&
+                    redshift_resolve_caelestia_qml >/dev/null 2>&1; then
                     record OK "packages" "Pacote $pkg" "Pacote do sistema ausente, mas plugin nativo presente em modo de usuário"
                 else
                     record ERROR "packages" "Pacote $pkg" "Pacote nativo Caelestia obrigatório não instalado e ausente em modo de usuário"

@@ -116,14 +116,32 @@ create_isolated_repo() {
 # -----------------------------------------------------------------------------
 # Helper: Create an isolated sandbox with mocked external binaries
 # -----------------------------------------------------------------------------
+mock_caelestia_qml() {
+    local root="$1" module name dir
+    for module in Caelestia Caelestia.Blobs Caelestia.Components Caelestia.Config \
+        Caelestia.I18n Caelestia.Images Caelestia.Models Caelestia.Services Caelestia.Settings; do
+        dir="$root/${module//./\/}"
+        name="caelestia-${module##*.}plugin"
+        mkdir -p "$dir"
+        printf 'module %s\noptional plugin %s\n' "$module" "$name" > "$dir/qmldir"
+        touch "$dir/lib$name.so"
+    done
+    touch "$root/Caelestia/I18n/Tr.qml" "$root/Caelestia/I18n/Units.qml"
+}
+
+install_mock_qml_helper() {
+    mkdir -p "$XDG_DATA_HOME/redshift-os/recovery"
+    cp "$REPO_ROOT/dots/.local/share/redshift-os/recovery/caelestia-qml.sh" "$XDG_DATA_HOME/redshift-os/recovery/"
+}
+
 create_sandbox() {
     local name="$1"
     local sb="$TEST_ROOT/$name"
     mkdir -p "$sb/home" "$sb/bin" "$sb/mock-state" "$sb/qml/Caelestia"
 
-    # Mock Caelestia QML plugin qmldir and native library
-    printf 'module Caelestia\n' > "$sb/qml/Caelestia/qmldir"
-    touch "$sb/qml/Caelestia/libcaelestia-coreplugin.so"
+    mock_caelestia_qml "$sb/qml"
+    printf '#!/bin/sh\nexit 0\n' > "$sb/bin/ldd"
+    chmod +x "$sb/bin/ldd"
 
     # Mock `qs` (Quickshell CLI)
     cat > "$sb/bin/qs" <<'EOF'
@@ -686,6 +704,7 @@ export XDG_DATA_HOME="$sb_hyb/home/.local/share"
 export XDG_STATE_HOME="$sb_hyb/home/.local/state"
 export XDG_CACHE_HOME="$sb_hyb/home/.cache"
 export XDG_BIN_HOME="$sb_hyb/home/.local/bin"
+install_mock_qml_helper
 export CAELESTIA_QML_PATH="$sb_hyb/qml"
 export CAELESTIA_QML_ONLY="true"
 export END4_LOG="$sb_hyb/mock-state/end4.log"
@@ -920,11 +939,75 @@ printf "\n${CLR_CYAN}=== 7. Validação Estática do PKGBUILD e Integridade Upst
 ) && pass "PKGBUILD illogical-impulse-caelestia-plugin validado (commit fixado, dependências Qt6/QML/C++/mídia)" \
   || fail "PKGBUILD illogical-impulse-caelestia-plugin validado"
 
-if grep -RIn "greyrat" dots/ sdata/ setup >/dev/null 2>&1; then
+if git grep --untracked --exclude-standard -n "greyrat" -- dots/ sdata/ setup >/dev/null; then
     fail "Portabilidade: zero referências hardcoded ao usuário 'greyrat' em dots/, sdata/ e setup"
 else
     pass "Portabilidade: zero referências hardcoded ao usuário 'greyrat' em dots/, sdata/ e setup"
 fi
+
+(
+    dir="$(mktemp -d "$TEST_ROOT/browser.XXXXXX")"
+    launcher="$REPO_ROOT/dots/.config/hypr/hyprland/scripts/launch-browser.sh"
+    ln -s "$(command -v bash)" "$dir/bash"
+    export PATH="$dir" LOG="$dir/launched"
+    printf '#!/bin/sh\nexit 7\n' > "$dir/google-chrome-stable"
+    printf '#!/bin/sh\nprintf "chrome\\n" >> "$LOG"\n' > "$dir/google-chrome"
+    printf '#!/bin/sh\nprintf "org.mozilla.firefox.desktop\\n"\n' > "$dir/xdg-mime"
+    printf '#!/bin/sh\nprintf "%%s\\n" "$2" >> "$LOG"\n' > "$dir/gtk-launch"
+    /usr/bin/chmod +x "$dir"/{google-chrome-stable,google-chrome,xdg-mime,gtk-launch}
+
+    "$launcher" 2>"$dir/stderr" || exit 1
+    [[ "$(<"$LOG")" == chrome && "$(<"$dir/stderr")" == *google-chrome-stable* ]] || exit 2
+
+    /usr/bin/rm "$dir/google-chrome"
+    "$launcher" 2>"$dir/stderr" || exit 3
+    [[ "$(<"$LOG")" == $'chrome\norg.mozilla.firefox.desktop' ]] || exit 4
+
+    /usr/bin/rm "$dir/gtk-launch"
+    if "$launcher" 2>"$dir/stderr"; then
+        exit 5
+    fi
+    [[ "$(<"$dir/stderr")" == *"Nenhum navegador"* ]]
+) && pass "Super+W: launcher tenta o próximo navegador, associações HTTPS e informa indisponibilidade" \
+  || fail "Super+W: falha no launcher de navegador"
+
+(
+    dir="$(mktemp -d "$TEST_ROOT/clipboard.XXXXXX")"
+    export XDG_RUNTIME_DIR="$dir" XDG_CONFIG_HOME="$dir/config" LOG="$dir/log"
+    export PATH="$dir:$PATH"
+    entry_script="$REPO_ROOT/dots/.config/quickshell/ii/scripts/clipboard/entry.sh"
+    history_script="$REPO_ROOT/dots/.config/hypr/hyprland/scripts/clipboard-history.sh"
+    mkdir -p "$XDG_CONFIG_HOME/quickshell/ii/scripts/clipboard"
+    ln -s "$entry_script" "$XDG_CONFIG_HOME/quickshell/ii/scripts/clipboard/entry.sh"
+    export ENTRY=$'42\t100% \\ literal'
+    cat > "$dir/cliphist" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+    list) printf '%s\n' "$ENTRY" ;;
+    decode) IFS= read -r line && [[ "$line" == "$ENTRY" ]] || exit 3
+        printf 'decoded\0bytes' ;;
+    delete) IFS= read -r line && [[ "$line" == "$ENTRY" ]] && printf 'delete\n' >> "$LOG" ;;
+esac
+EOF
+    printf '#!/bin/sh\ncat > "$XDG_RUNTIME_DIR/content"\n' > "$dir/wl-copy"
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$LOG"\nexit "${QS_STATUS:-0}"\n' > "$dir/qs"
+    printf '#!/bin/sh\nprintf "fuzzel\\n" >> "$LOG"\nIFS= read -r line && printf "%%s\\n" "$line"\n' > "$dir/fuzzel"
+    chmod +x "$dir"/{cliphist,wl-copy,qs,fuzzel}
+
+    "$history_script" || exit 1
+    [[ "$(<"$LOG")" == '-c ii ipc call clipboardHistory toggle' && ! -e "$dir/content" ]] || exit 2
+    QS_STATUS=1 "$history_script" || exit 3
+    cmp "$dir/content" <(printf 'decoded\0bytes') || exit 4
+    if "$entry_script" copy cliphist $'50\tstale' || "$entry_script" copy cliphist 'invalid'; then
+        exit 5
+    fi
+    cmp "$dir/content" <(printf 'decoded\0bytes') || exit 6
+    preview="$("$entry_script" preview cliphist "$ENTRY")" || exit 7
+    cmp "$preview" "$dir/content" || exit 8
+    "$entry_script" delete cliphist "$ENTRY" || exit 9
+    [[ "$(<"$LOG")" == *$'fuzzel\ndelete' ]]
+) && pass "Super+V: IPC e fallback exclusivos, cópia binária, prévia, exclusão e entradas vencidas" \
+  || fail "Super+V: falha no fluxo de histórico da área de transferência"
 
 printf "\n${CLR_CYAN}=== 8. Testes de Segurança de Submódulos Git e Auditoria de Confirmações AUR ===${CLR_RST}\n"
 
@@ -1766,6 +1849,7 @@ printf "\n${CLR_CYAN}=== 11. Redshift Doctor, Hook de Pacman e Testes de Resili�
 
     mkdir -p "$sb_a/empty_qml"
     export CAELESTIA_QML_ONLY="true"
+    install_mock_qml_helper
     export CAELESTIA_QML_PATH="$sb_a/empty_qml"
     export UI_SWITCH_WAIT_ITERS=5
     export UI_SWITCH_WAIT_SLEEP=0.01
@@ -1799,10 +1883,7 @@ printf "\n${CLR_CYAN}=== 11. Redshift Doctor, Hook de Pacman e Testes de Resili�
     echo '#!/usr/bin/env bash' > "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/scripts/end4-theme-bridge.sh"
     chmod +x "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/scripts/end4-theme-bridge.sh"
 
-    mkdir -p "$sb_b/qml/Caelestia/I18n"
-    printf 'module Caelestia\n' > "$sb_b/qml/Caelestia/qmldir"
-    touch "$sb_b/qml/Caelestia/libcaelestia-coreplugin.so" "$sb_b/qml/Caelestia/I18n/Tr.qml" "$sb_b/qml/Caelestia/I18n/Units.qml"
-
+    install_mock_qml_helper
     export CAELESTIA_QML_PATH="$sb_b/qml"
     export UI_SWITCH_WAIT_ITERS=5
     export UI_SWITCH_WAIT_SLEEP=0.01
@@ -1834,9 +1915,10 @@ printf "\n${CLR_CYAN}=== 11. Redshift Doctor, Hook de Pacman e Testes de Resili�
     unset CAELESTIA_QML_PATH CAELESTIA_QML_ONLY
 
     alt_dir="$HOME/.local/lib/qt6/qml/Caelestia"
-    mkdir -p "$alt_dir/I18n"
-    printf 'module Caelestia\n' > "$alt_dir/qmldir"
-    touch "$alt_dir/libcaelestia-coreplugin.so" "$alt_dir/I18n/Tr.qml" "$alt_dir/I18n/Units.qml"
+    mock_caelestia_qml "${alt_dir%/Caelestia}"
+    install_mock_qml_helper
+    export CAELESTIA_QML_PATH="$sb_c/qml"
+    rm "$CAELESTIA_QML_PATH/Caelestia/Models/libcaelestia-Modelsplugin.so"
 
     mkdir -p "$XDG_CONFIG_HOME/quickshell/ii" "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/scripts" "$XDG_STATE_HOME/quickshell/ui-switch"
     touch "$XDG_CONFIG_HOME/quickshell/ii/shell.qml" "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/shell.qml"
@@ -1868,11 +1950,9 @@ printf "\n${CLR_CYAN}=== 11. Redshift Doctor, Hook de Pacman e Testes de Resili�
     export XDG_CACHE_HOME="$sb_d/home/.cache"
     export XDG_BIN_HOME="$sb_d/home/.local/bin"
 
-    mkdir -p "$sb_d/qml/Caelestia/I18n"
-    printf 'module Caelestia\n' > "$sb_d/qml/Caelestia/qmldir"
-    touch "$sb_d/qml/Caelestia/I18n/Tr.qml" "$sb_d/qml/Caelestia/I18n/Units.qml"
-    rm -f "$sb_d/qml/Caelestia/"*.so*
+    rm "$sb_d/qml/Caelestia/Models/libcaelestia-Modelsplugin.so"
 
+    install_mock_qml_helper
     export CAELESTIA_QML_PATH="$sb_d/qml"
     export CAELESTIA_QML_ONLY="true"
 
@@ -1903,10 +1983,6 @@ printf "\n${CLR_CYAN}=== 11. Redshift Doctor, Hook de Pacman e Testes de Resili�
     export XDG_CACHE_HOME="$sb_e/home/.cache"
     export XDG_BIN_HOME="$sb_e/home/.local/bin"
 
-    mkdir -p "$sb_e/qml/Caelestia"
-    printf 'module Caelestia\n' > "$sb_e/qml/Caelestia/qmldir"
-    touch "$sb_e/qml/Caelestia/libcaelestia-coreplugin.so"
-
     cat > "$sb_e/bin/ldd" <<'EOF'
 #!/usr/bin/env bash
 echo "undefined symbol: _ZN9QQuickItem10itemChangeEN10QQuickItem17ItemChangeReasonE (./libcaelestia-coreplugin.so)"
@@ -1914,6 +1990,7 @@ exit 0
 EOF
     chmod +x "$sb_e/bin/ldd"
 
+    install_mock_qml_helper
     export CAELESTIA_QML_PATH="$sb_e/qml"
     export CAELESTIA_QML_ONLY="true"
     mkdir -p "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid"
@@ -1946,6 +2023,7 @@ EOF
     echo '#!/usr/bin/env bash' > "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/scripts/end4-theme-bridge.sh"
     chmod +x "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid/scripts/end4-theme-bridge.sh"
 
+    install_mock_qml_helper
     export CAELESTIA_QML_PATH="$sb_f/qml"
     export UI_SWITCH_WAIT_ITERS=5
     export UI_SWITCH_WAIT_SLEEP=0.01
@@ -1971,6 +2049,7 @@ EOF
     export PATH="$sb_g/bin:$PATH" MOCK_STATE_DIR="$sb_g/mock-state" HOME="$sb_g/home"
     export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
     export XDG_STATE_HOME="$HOME/.local/state" XDG_BIN_HOME="$HOME/.local/bin"
+    install_mock_qml_helper
     export CAELESTIA_QML_PATH="$sb_g/qml"
     guard="${REPO_ROOT}/dots/.local/bin/redshift-guard"
     doctor="${REPO_ROOT}/dots/.local/bin/redshift-doctor"
@@ -2009,6 +2088,7 @@ EOF
     export PATH="$sb_h/bin:$PATH" MOCK_STATE_DIR="$sb_h/mock-state" HOME="$sb_h/home"
     export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
     export XDG_STATE_HOME="$HOME/.local/state" XDG_BIN_HOME="$HOME/.local/bin"
+    install_mock_qml_helper
     export CAELESTIA_QML_PATH="$sb_h/qml"
     mkdir -p "$XDG_BIN_HOME" "$XDG_DATA_HOME/redshift-guard/pkgs"
     cp "${REPO_ROOT}/dots/.local/bin/redshift-guard" "$XDG_BIN_HOME/"
@@ -2056,6 +2136,7 @@ EOF
     export XDG_STATE_HOME="$sb_i/home/.local/state"
     export XDG_CACHE_HOME="$sb_i/home/.cache"
     export XDG_BIN_HOME="$sb_i/home/.local/bin"
+    install_mock_qml_helper
     export CAELESTIA_QML_PATH="$sb_i/qml"
 
     iso_i="$(create_isolated_repo "scen-i-repo")"
@@ -2255,6 +2336,7 @@ export RECOVERY_POLL_SLEEP=0.01
 
     mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_CONFIG_HOME/quickshell/caelestia-hybrid" "$XDG_CONFIG_HOME/illogical-impulse"
     printf 'caelestia\n' > "$XDG_STATE_HOME/quickshell/ui-switch/current"
+    install_mock_qml_helper
     export CAELESTIA_QML_PATH="$sb/qml"
     rm -f "$MOCK_STATE_DIR/qs_cael_running"
 
@@ -2764,6 +2846,7 @@ EOF
     export PATH="$sb/bin:$PATH" MOCK_STATE_DIR="$sb/mock-state" HOME="$sb/home"
     export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
     export XDG_STATE_HOME="$HOME/.local/state" XDG_BIN_HOME="$HOME/.local/bin"
+    install_mock_qml_helper
     export CAELESTIA_QML_PATH="$sb/qml" HYPRLAND_INSTANCE_SIGNATURE=guard_fallback_test
     recover="${REPO_ROOT}/dots/.local/bin/redshift-ui-recover"
     mkdir -p "$XDG_STATE_HOME/quickshell/ui-switch" "$XDG_STATE_HOME/redshift-os" \

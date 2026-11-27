@@ -27,11 +27,18 @@ journalctl --user -u redshift-ui-watchdog.service -b
 
 Os logs de recuperação e inicialização do frontend ficam em `${XDG_STATE_HOME:-$HOME/.local/state}/redshift-os/`. O serviço encerra quando o Hyprland deixa de responder.
 
+## Atalhos do end-4
+
+- **Super + W** abre o navegador pelo Hyprland, inclusive durante a recuperação do Quickshell. A instalação padrão usa o primeiro navegador disponível na ordem do launcher e pode usar a associação HTTPS para instalações como Flatpak, quando `gtk-launch` está disponível. A variável `browser` em `hypr/custom/variables.lua` continua disponível para escolher outro comando.
+- **Super + V** abre ou fecha o histórico do Cliphist nas famílias `ii` e `waffle`. Se o painel estiver indisponível, o fuzzel oferece os itens persistidos. Uma instalação nova mostra o estado vazio até que algum conteúdo seja copiado.
+
 ## Atualizações e ABI
 
 O pacote `illogical-impulse-quickshell-git` instala `redshift-doctor-check.hook` em `/usr/share/libalpm/hooks` e depende de `pacman-contrib`. Em transações envolvendo Qt, Quickshell, Caelestia e bibliotecas selecionadas, o hook atualiza `/var/lib/redshift-guard/pacman-transaction` após o fim da transação. Cada sessão compara o marcador e as versões instaladas com seu último diagnóstico. Assim, uma verificação continua pendente mesmo que a atualização ocorra fora da sessão gráfica.
 
 O Guard verifica a compatibilidade Qt do Quickshell e usa `ldd -r` para identificar bibliotecas ausentes e símbolos não resolvidos no Quickshell, nas bibliotecas nativas do Caelestia e na libcava. Isso detecta, por exemplo, quando a libcava ainda exige uma versão de sndio que o sistema atualizou. O UI Switch faz a verificação antes de iniciar Caelestia e confirma o IPC antes de concluir a troca.
+
+A troca, o Doctor e a recuperação procuram uma instalação completa dos módulos nativos Caelestia nos caminhos QML do Qt, do sistema e do usuário. `CAELESTIA_QML_PATH` pode indicar a raiz do plugin para uma instalação personalizada. A verificação de ABI inclui os submódulos importados pela interface.
 
 A cada seis horas de consulta bem-sucedida, o Guard usa `checkupdates` com uma base temporária separada para listar atualizações dos repositórios configurados no Pacman. Em caso de falha da consulta, registra o erro e aguarda 15 minutos antes de repetir. As últimas verificações e a lista de atualizações ficam no estado XDG do usuário.
 

@@ -1,4 +1,5 @@
 HOME = os.getenv("HOME")
+HYPR_CONFIG_DIR = (os.getenv("XDG_CONFIG_HOME") or (HOME .. "/.config")) .. "/hypr"
 
 function is_file_exists(name)
    local f = io.open(name, "r")

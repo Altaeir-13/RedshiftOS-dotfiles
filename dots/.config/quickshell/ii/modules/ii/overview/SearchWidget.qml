@@ -158,9 +158,19 @@ Item { // Wrapper
                 color: Appearance.colors.colOutlineVariant
             }
 
+            StyledText {
+                visible: root.searchingText.startsWith(Config.options.search.prefix.clipboard)
+                    && !Cliphist.loading && appResults.count === 0
+                Layout.fillWidth: true
+                Layout.margins: 12
+                text: Cliphist.emptyMessage
+                horizontalAlignment: Text.AlignHCenter
+                color: Appearance.colors.colSubtext
+            }
+
             ListView { // App results
                 id: appResults
-                visible: root.showResults
+                visible: root.showResults && appResults.count > 0
                 Layout.fillWidth: true
                 implicitHeight: Math.min(600, appResults.contentHeight + topMargin + bottomMargin)
                 clip: true

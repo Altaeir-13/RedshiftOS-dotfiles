@@ -104,13 +104,23 @@ Scope {
     }
 
     function toggleClipboard() {
-        if (GlobalStates.overviewOpen && overviewScope.dontAutoCancelSearch) {
+        const prefix = Config.options.search.prefix.clipboard;
+        if (GlobalStates.overviewOpen && panelWindow.searchingText.startsWith(prefix)) {
             GlobalStates.overviewOpen = false;
             return;
         }
+        Cliphist.refresh();
         overviewScope.dontAutoCancelSearch = true;
-        panelWindow.setSearchingText(Config.options.search.prefix.clipboard);
+        panelWindow.setSearchingText(prefix);
         GlobalStates.overviewOpen = true;
+    }
+
+    IpcHandler {
+        target: "clipboardHistory"
+
+        function toggle(): void {
+            overviewScope.toggleClipboard();
+        }
     }
 
     function toggleEmojis() {

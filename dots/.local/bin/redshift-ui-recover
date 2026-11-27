@@ -475,35 +475,6 @@ check_watchdog_status() {
     return 1
 }
 
-# Plugin resolver para Caelestia
-resolve_caelestia_plugin_dir() {
-    local candidate
-    local -a candidates=()
-
-    if [[ -n "${CAELESTIA_QML_PATH:-}" ]]; then
-        candidates+=("$CAELESTIA_QML_PATH")
-    fi
-
-    candidates+=(
-        "$(timeout 5 qtpaths6 --query QT_INSTALL_QML 2>/dev/null || true)"
-        "/usr/lib/qt6/qml"
-        "/usr/local/lib/qt6/qml"
-        "$XDG_DATA_HOME/quickshell/qml"
-        "$HOME/.local/lib/qt6/qml"
-    )
-
-    for candidate in "${candidates[@]}"; do
-        if [[ -n "$candidate" && -d "$candidate/Caelestia" ]]; then
-            if [[ -f "$candidate/Caelestia/qmldir" && -r "$candidate/Caelestia/qmldir" ]]; then
-                printf '%s\n' "$candidate"
-                return 0
-            fi
-        fi
-    done
-
-    return 1
-}
-
 # -----------------------------------------------------------------------------
 # Ações de Recuperação
 # -----------------------------------------------------------------------------
@@ -581,13 +552,27 @@ stop_frontend() {
 }
 
 restart_active_frontend() {
-    local frontend="$1" plugin_dir
+    local frontend="$1" plugin_dir helper="$XDG_DATA_HOME/redshift-os/recovery/caelestia-qml.sh"
+    if [[ "$frontend" == caelestia ]]; then
+        if [[ ! -r "$helper" ]]; then
+            log ERROR "Diagnóstico QML ausente: $helper. Execute ./setup install."
+            return 1
+        fi
+        source "$helper"
+        if ! plugin_dir="$(redshift_resolve_caelestia_qml 2>&1)"; then
+            log ERROR "$plugin_dir"
+            return 1
+        fi
+    fi
+
     stop_frontend "$frontend" || return 1
     log RECOVERY "Iniciando frontend '$frontend'."
 
     if [[ "$frontend" == caelestia ]]; then
-        plugin_dir="$(resolve_caelestia_plugin_dir || true)"
-        setsid -f env             QML_IMPORT_PATH="$plugin_dir${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}"             QML2_IMPORT_PATH="$plugin_dir${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}"             qs -c caelestia-hybrid 7>&- 9>&- >"$CAEL_LOG" 2>&1 || return 1
+        setsid -f env \
+            QML_IMPORT_PATH="$plugin_dir${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}" \
+            QML2_IMPORT_PATH="$plugin_dir${QML2_IMPORT_PATH:+:$QML2_IMPORT_PATH}" \
+            qs -c caelestia-hybrid 7>&- 9>&- >"$CAEL_LOG" 2>&1 || return 1
     else
         setsid -f qs -c ii 7>&- 9>&- >"$END4_LOG" 2>&1 || return 1
     fi

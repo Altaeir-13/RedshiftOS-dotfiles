@@ -33,27 +33,15 @@ link_check() {
 }
 
 caelestia_abi() {
-    local root entry found=false failed=0 qt_qml
-    qt_qml="$(timeout 5 qtpaths6 --query QT_INSTALL_QML 2>/dev/null || true)"
-    local -a roots=("${CAELESTIA_QML_PATH:-}")
-    if [[ "${CAELESTIA_QML_ONLY:-false}" != true ]]; then
-        roots+=("$qt_qml" /usr/lib/qt6/qml /usr/local/lib/qt6/qml
-            "$data/quickshell/qml" "$HOME/.local/lib/qt6/qml")
-    fi
-    for root in "${roots[@]}"; do
-        [[ -n "$root" && -r "$root/Caelestia/qmldir" ]] || continue
-        while IFS= read -r -d '' entry; do
-            found=true
-            link_check "$entry" || failed=1
-        done < <(find "$root/Caelestia" -type f -name '*.so*' -print0)
-        break
-    done
-    if ! $found; then
-        echo 'Módulo QML nativo Caelestia ausente ou incompleto.'
+    local helper="$data/redshift-os/recovery/caelestia-qml.sh" root
+    if [[ ! -r "$helper" ]]; then
+        printf 'Diagnóstico QML ausente: %s. Execute ./setup install.\n' "$helper"
         return 1
     fi
-    (( failed == 0 )) && echo 'Caelestia: QML e bibliotecas nativas validados.'
-    return "$failed"
+    source "$helper"
+    root="$(redshift_resolve_caelestia_qml)" || return 1
+    redshift_caelestia_link_check "$root" || return 1
+    echo 'Caelestia: QML e bibliotecas nativas validados.'
 }
 
 abi() {
@@ -73,7 +61,7 @@ abi() {
     fi
 
     if [[ "$target" == caelestia ]]; then
-        caelestia_abi || failed=1
+        caelestia_abi 2>&1 || failed=1
         if command -v pacman >/dev/null; then
             files="$(pacman -Qlq libcava 2>/dev/null | awk '/\/libcava\.so$/ {print; found=1} END {if (!found) exit 1}')"
             if [[ -z "$files" ]]; then
@@ -99,7 +87,8 @@ fingerprint() {
     {
         printf '%s\n' "$installed" | awk -v pattern="$pkg_pattern" '$0 ~ pattern'
         stat -c '%y %i' "$stamp" 2>/dev/null || true
-        printf '%s\n' "$(frontend)" "${CAELESTIA_QML_PATH:-}"
+        printf '%s\n' "$(frontend)" "${CAELESTIA_QML_PATH:-}" "${CAELESTIA_QML_ONLY:-}" \
+            "${QML_IMPORT_PATH:-}" "${QML2_IMPORT_PATH:-}"
     } | sha256sum | cut -d ' ' -f 1
 }
 

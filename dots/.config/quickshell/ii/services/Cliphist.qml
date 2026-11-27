@@ -16,6 +16,13 @@ Singleton {
     property bool sloppySearch: Config.options?.search.sloppy ?? false
     property real scoreThreshold: 0.2
     property list<string> entries: []
+    property bool refreshPending: false
+    property bool listUnavailable: false
+    readonly property bool loading: readProc.running
+    readonly property string emptyMessage: listUnavailable ? Translation.tr("Could not read clipboard history")
+        : entries.length > 0 ? Translation.tr("No matching clipboard entries")
+        : Translation.tr("Clipboard history is empty")
+    readonly property string entryScript: Quickshell.shellPath("scripts/clipboard/entry.sh")
     readonly property var preparedEntries: entries.map(a => ({
         name: Fuzzy.prepare(`${a.replace(/^\s*\S+\s+/, "")}`),
         entry: a
@@ -47,26 +54,30 @@ Singleton {
     }
 
     function refresh() {
-        readProc.buffer = []
-        readProc.running = true
+        if (readProc.running) {
+            refreshPending = true;
+            return;
+        }
+        readProc.buffer = [];
+        readProc.running = true;
+    }
+
+    function entryCommand(action, entry) {
+        if (!/^\d+\t/.test(entry))
+            return [];
+        return [entryScript, action, root.cliphistBinary, entry];
     }
 
     function copy(entry) {
-        if (root.cliphistBinary.includes("cliphist")) // Classic cliphist
-            Quickshell.execDetached(["bash", "-c", `printf '${StringUtils.shellSingleQuoteEscape(entry)}' | ${root.cliphistBinary} decode | wl-copy`]);
-        else { // Stash
-            const entryNumber = entry.split("\t")[0];
-            Quickshell.execDetached(["bash", "-c", `${root.cliphistBinary} decode ${entryNumber} | wl-copy`]);
-        }
+        const command = entryCommand("copy", entry);
+        if (command.length)
+            Quickshell.execDetached(command);
     }
 
     function paste(entry) {
-        if (root.cliphistBinary.includes("cliphist")) // Classic cliphist
-            Quickshell.execDetached(["bash", "-c", `printf '${StringUtils.shellSingleQuoteEscape(entry)}' | ${root.cliphistBinary} decode | wl-copy && wl-paste`]);
-        else { // Stash
-            const entryNumber = entry.split("\t")[0];
-            Quickshell.execDetached(["bash", "-c", `${root.cliphistBinary} decode ${entryNumber} | wl-copy; ${root.pressPasteCommand}`]);
-        }
+        const command = entryCommand("copy", entry);
+        if (command.length)
+            Quickshell.execDetached(["bash", "-c", '"$@" && ' + (root.cliphistBinary.includes("cliphist") ? "wl-paste" : root.pressPasteCommand), "cliphist-paste", ...command]);
     }
 
     function superpaste(count, isImage = false) {
@@ -75,21 +86,24 @@ Singleton {
             if (!isImage) return true;
             return entryIsImage(entry);
         }).slice(0, count)
-        const pasteCommands = [...targetEntries].reverse().map(entry => `printf '${StringUtils.shellSingleQuoteEscape(entry)}' | ${root.cliphistBinary} decode | wl-copy && sleep ${root.pasteDelay} && ${root.pressPasteCommand}`)
+        const pasteCommands = [...targetEntries].reverse().map(entry => entryCommand("copy", entry))
+            .filter(command => command.length)
+            .map(command => command.map(arg => `'${StringUtils.shellSingleQuoteEscape(arg)}'`).join(" ")
+                + ` && sleep ${root.pasteDelay} && ${root.pressPasteCommand}`)
         // Act
         Quickshell.execDetached(["bash", "-c", pasteCommands.join(` && sleep ${root.pasteDelay} && `)]);
     }
 
     Process {
         id: deleteProc
-        property string entry: ""
-        command: ["bash", "-c", `echo '${StringUtils.shellSingleQuoteEscape(deleteProc.entry)}' | ${root.cliphistBinary} delete`]
         function deleteEntry(entry) {
-            deleteProc.entry = entry;
-            deleteProc.running = true;
-            deleteProc.entry = "";
+            const command = root.entryCommand("delete", entry);
+            if (!running && command.length)
+                exec(command);
         }
         onExited: (exitCode, exitStatus) => {
+            if (exitCode !== 0 || exitStatus !== 0)
+                console.warn("[Cliphist] Delete failed with code", exitCode, "and status", exitStatus);
             root.refresh();
         }
     }
@@ -110,39 +124,33 @@ Singleton {
         wipeProc.running = true;
     }
 
-    Connections {
-        target: Quickshell
-        function onClipboardTextChanged() {
-            delayedUpdateTimer.restart()
-        }
-    }
-
-    Timer {
-        id: delayedUpdateTimer
-        interval: Config.options.hacks.arbitraryRaceConditionDelay
-        repeat: false
-        onTriggered: {
-            root.refresh()
-        }
-    }
-
     Process {
         id: readProc
         property list<string> buffer: []
 
-        command: [root.cliphistBinary, "list"]
+        command: ["sh", "-c", 'exec "$1" list', "cliphist-list", root.cliphistBinary]
 
         stdout: SplitParser {
             onRead: (line) => {
-                readProc.buffer.push(line)
+                if (/^\d+\t/.test(line))
+                    readProc.buffer.push(line);
             }
         }
 
+        stderr: StdioCollector {
+            id: listErrors
+        }
+
         onExited: (exitCode, exitStatus) => {
-            if (exitCode === 0) {
-                root.entries = readProc.buffer
-            } else {
-                console.error("[Cliphist] Failed to refresh with code", exitCode, "and status", exitStatus)
+            const errorText = listErrors.text.trim();
+            const firstRun = exitCode === 1 && errorText === "opening db: please store something first";
+            root.listUnavailable = exitStatus !== 0 || (exitCode !== 0 && !firstRun);
+            root.entries = root.listUnavailable ? [] : readProc.buffer;
+            if (root.listUnavailable)
+                console.warn("[Cliphist] Could not list entries:", exitCode, exitStatus, errorText);
+            if (root.refreshPending) {
+                root.refreshPending = false;
+                Qt.callLater(root.refresh);
             }
         }
     }

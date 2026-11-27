@@ -94,9 +94,6 @@ Scope {
         function toggleReleaseInterrupt() {
             GlobalStates.superReleaseMightTrigger = false;
         }
-        function clipboardToggle() {
-            overviewScope.toggleClipboard();
-        }
     }
 
     GlobalShortcut {

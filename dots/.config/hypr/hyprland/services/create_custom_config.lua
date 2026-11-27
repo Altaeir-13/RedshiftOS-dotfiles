@@ -1,11 +1,7 @@
-require("hyprland/lib")
+require("hyprland.lib")
 
 hl.on("hyprland.start", function()
-   local homeDir = os.getenv("HOME")
-   if string.len(homeDir) == 0 then
-      return
-   end
-   local baseCustomDir = homeDir .. "/.config/hypr/custom"
+   local baseCustomDir = HYPR_CONFIG_DIR .. "/custom"
    local files = {
       baseCustomDir .. "/env.lua",
       baseCustomDir .. "/execs.lua",

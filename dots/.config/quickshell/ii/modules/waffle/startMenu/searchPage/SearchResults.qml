@@ -43,10 +43,21 @@ RowLayout {
         }
     }
 
-    ResultList {
-        id: resultList
+    Item {
         Layout.fillHeight: true
         Layout.fillWidth: true
+
+        ResultList {
+            id: resultList
+            anchors.fill: parent
+        }
+
+        WText {
+            anchors.centerIn: parent
+            visible: LauncherSearch.query.startsWith(Config.options.search.prefix.clipboard)
+                && !Cliphist.loading && resultList.count === 0
+            text: Cliphist.emptyMessage
+        }
     }
     ResultPreview {
         Layout.preferredWidth: 386

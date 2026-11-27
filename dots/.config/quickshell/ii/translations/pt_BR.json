@@ -1,4 +1,7 @@
 {
+  "Clipboard history is empty": "O histórico da área de transferência está vazio",
+  "No matching clipboard entries": "Nenhum item corresponde à busca",
+  "Could not read clipboard history": "Não foi possível ler o histórico da área de transferência",
   "Switch to Caelestia": "Alternar para Caelestia",
   "Attach a file. Only works with Gemini.": "Anexar um arquivo. Funciona apenas com Gemini.",
   "%1   •   %2 tasks": "%1   •   %2 tarefas",

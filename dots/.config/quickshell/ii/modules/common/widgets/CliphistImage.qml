@@ -15,17 +15,8 @@ Rectangle {
     property bool blur: false
     property string blurText: "Image hidden"
 
-    property string imageDecodePath: Directories.cliphistDecode
-    property string imageDecodeFileName: `${entryNumber}`
-    property string imageDecodeFilePath: `${imageDecodePath}/${imageDecodeFileName}`
     property string source
 
-    property int entryNumber: {
-        if (!root.entry)
-            return 0;
-        const match = root.entry.match(/^(\d+)\t/);
-        return match ? parseInt(match[1]) : 0;
-    }
     property int imageWidth: {
         if (!root.entry)
             return 0;
@@ -47,25 +38,24 @@ Rectangle {
     implicitHeight: imageHeight * scale
     implicitWidth: imageWidth * scale
 
-    Component.onCompleted: {
-        decodeImageProcess.running = true;
-    }
-
     Process {
         id: decodeImageProcess
-        command: ["bash", "-c", `[ -f ${imageDecodeFilePath} ] || echo '${StringUtils.shellSingleQuoteEscape(root.entry)}' | ${Cliphist.cliphistBinary} decode > '${imageDecodeFilePath}'`]
+        running: command.length > 0
+        command: Cliphist.entryCommand("preview", root.entry)
+        stdout: StdioCollector {
+            id: decodedPath
+        }
         onExited: (exitCode, exitStatus) => {
-            if (exitCode === 0) {
-                root.source = imageDecodeFilePath;
-            } else {
-                console.error("[CliphistImage] Failed to decode image for entry:", root.entry);
-                root.source = "";
-            }
+            if (exitCode === 0 && exitStatus === 0)
+                root.source = decodedPath.text.trim();
+            else
+                console.warn("[CliphistImage] Could not decode clipboard image:", exitCode, exitStatus);
         }
     }
 
     Component.onDestruction: {
-        Quickshell.execDetached(["bash", "-c", `[ -f '${imageDecodeFilePath}' ] && rm -f '${imageDecodeFilePath}'`]);
+        if (root.source)
+            Quickshell.execDetached(["rm", "-f", "--", root.source]);
     }
 
     layer.enabled: true
@@ -81,7 +71,7 @@ Rectangle {
         id: image
         anchors.fill: parent
 
-        source: Qt.resolvedUrl(root.source)
+        source: root.source ? Qt.resolvedUrl(root.source) : ""
         fillMode: Image.PreserveAspectFit
         antialiasing: true
         asynchronous: true

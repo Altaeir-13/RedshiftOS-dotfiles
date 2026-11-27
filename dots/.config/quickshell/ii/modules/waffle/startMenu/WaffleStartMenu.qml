@@ -71,16 +71,28 @@ Scope {
     }
 
     function toggleClipboard() {
-        if (LauncherSearch.query.startsWith(Config.options.search.prefix.clipboard) || !GlobalStates.searchOpen) {
-            GlobalStates.searchOpen = !GlobalStates.searchOpen;
+        const prefix = Config.options.search.prefix.clipboard;
+        if (GlobalStates.searchOpen && LauncherSearch.query.startsWith(prefix)) {
+            GlobalStates.searchOpen = false;
+            return;
         }
-        LauncherSearch.ensurePrefix(Config.options.search.prefix.clipboard);
+        Cliphist.refresh();
+        GlobalStates.searchOpen = true;
+        LauncherSearch.query = prefix;
     }
     function toggleEmojis() {
         if (LauncherSearch.query.startsWith(Config.options.search.prefix.emojis) || !GlobalStates.searchOpen) {
             GlobalStates.searchOpen = !GlobalStates.searchOpen;
         }
         LauncherSearch.ensurePrefix(Config.options.search.prefix.emojis);
+    }
+
+    IpcHandler {
+        target: "clipboardHistory"
+
+        function toggle(): void {
+            root.toggleClipboard();
+        }
     }
 
     IpcHandler {

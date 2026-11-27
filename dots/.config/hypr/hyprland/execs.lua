@@ -17,9 +17,14 @@ hl.on("hyprland.start", function ()
     hl.exec_cmd("easyeffects --hide-window --service-mode")
 
     -- Clipboard: history
-    --hl.exec_cmd("wl-paste --watch cliphist store")
-    hl.exec_cmd("wl-paste --type text --watch bash -c 'cliphist store && qs -c $qsConfig ipc call cliphistService update'")
-    hl.exec_cmd("wl-paste --type image --watch bash -c 'cliphist store && qs -c $qsConfig ipc call cliphistService update'")
+    for _, kind in ipairs({ "text", "image" }) do
+        hl.exec_cmd("wl-paste --type " .. kind .. [[ --watch sh -c '
+            cliphist store || exit
+            if timeout -k 1 2 qs -c "$qsConfig" ipc show >/dev/null 2>&1; then
+                timeout -k 1 2 qs -c "$qsConfig" ipc call cliphistService update
+            fi
+        ']])
+    end
 
     -- Cursor
     hl.exec_cmd("hyprctl setcursor Bibata-Modern-Classic 24")

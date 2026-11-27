@@ -7,7 +7,7 @@ require("hyprland.services")
 
 -- Environment variables --
 require("hyprland.env")
-if is_file_exists(HOME .. "/.config/hypr/custom/env.lua") then
+if is_file_exists(HYPR_CONFIG_DIR .. "/custom/env.lua") then
     require("custom.env")
 end
 
@@ -19,24 +19,24 @@ require("hyprland.colors")
 require("hyprland.keybinds")
 
 -- Custom configurations --
-if is_file_exists(HOME .. "/.config/hypr/custom/execs.lua") then
+if is_file_exists(HYPR_CONFIG_DIR .. "/custom/execs.lua") then
     require("custom.execs")
 end
-if is_file_exists(HOME .. "/.config/hypr/custom/general.lua") then
+if is_file_exists(HYPR_CONFIG_DIR .. "/custom/general.lua") then
     require("custom.general")
 end
-if is_file_exists(HOME .. "/.config/hypr/custom/rules.lua") then
+if is_file_exists(HYPR_CONFIG_DIR .. "/custom/rules.lua") then
     require("custom.rules")
 end
-if is_file_exists(HOME .. "/.config/hypr/custom/keybinds.lua") then
+if is_file_exists(HYPR_CONFIG_DIR .. "/custom/keybinds.lua") then
     require("custom.keybinds")
 end
 
 -- nwg-displays support --
-if is_file_exists(HOME .. "/.config/hypr/workspaces.lua") then
+if is_file_exists(HYPR_CONFIG_DIR .. "/workspaces.lua") then
     require("workspaces")
 end
-if is_file_exists(HOME .. "/.config/hypr/monitors.lua") then
+if is_file_exists(HYPR_CONFIG_DIR .. "/monitors.lua") then
     require("monitors")
 end
 
